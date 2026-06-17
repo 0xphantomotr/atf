@@ -1,0 +1,2 @@
+"""Law ingestion domain."""
+

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="sq">
+  <head>
+    <meta charset="utf-8">
+    <title>{{ report.title }}</title>
+    <style>
+      body {
+        color: #17202a;
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      h1, h2 {
+        color: #102030;
+      }
+      table {
+        border-collapse: collapse;
+        margin-top: 12px;
+        width: 100%;
+      }
+      th, td {
+        border: 1px solid #c7cdd4;
+        padding: 6px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #eef2f6;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>{{ report.title }}</h1>
+    <h2>Përmbledhje ekzekutive</h2>
+    <p>{{ report.summary }}</p>
+    <h2>Rekomandimi</h2>
+    <p>{{ report.recommendation }}</p>
+    <h2>Tabela e gjetjeve</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Severiteti</th>
+          <th>Gjetja</th>
+          <th>Baza ligjore</th>
+          <th>Veprimi i kërkuar</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for finding in report.findings %}
+        <tr>
+          <td>{{ finding.severity }}</td>
+          <td>{{ finding.title }}</td>
+          <td>{{ finding.law_reference or finding.rule_code or "-" }}</td>
+          <td>{{ finding.required_action or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>
+

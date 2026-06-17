@@ -1,0 +1,53 @@
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class GenerateRequest(BaseModel):
+    job_type: str = "documentation_checklist"
+    output_format: str = "pdf"
+    language: str = "sq-AL"
+    law_scope: list[str] = Field(default_factory=lambda: ["VKM_610_2022"])
+    user_prompt: str | None = None
+
+
+class ReviewJobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    job_type: str
+    status: str
+    language: str
+    output_format: str
+    progress: int
+
+
+class ReviewFindingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    review_job_id: UUID
+    project_id: UUID
+    severity: str
+    title: str
+    description: str
+    law_reference: str | None
+    rule_code: str | None
+    evidence: dict
+    required_action: str | None
+    confidence: float | None
+    status: str
+
+
+class StructuredFinding(BaseModel):
+    severity: str
+    title: str
+    description: str
+    law_reference: str | None = None
+    rule_code: str | None = None
+    evidence: dict
+    required_action: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    status: str = "open"
+
