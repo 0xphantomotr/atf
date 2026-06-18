@@ -5,7 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.files import service
-from app.files.schemas import FileVersionRead, ProjectFileRead, ProjectFileUploadRead
+from app.files.schemas import (
+    FileVersionRead,
+    ParsedDocumentRead,
+    ProjectFileRead,
+    ProjectFileUploadRead,
+)
 from app.users.dependencies import get_current_user
 from app.users.models import User
 
@@ -98,3 +103,36 @@ async def list_file_versions(
     )
     return [FileVersionRead.model_validate(version) for version in versions]
 
+
+@router.get("/{file_id}/parsed", response_model=ParsedDocumentRead)
+async def get_current_parsed_document(
+    project_id: UUID,
+    file_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ParsedDocumentRead:
+    parsed_document = await service.get_parsed_document_for_current_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        user_id=current_user.id,
+    )
+    return ParsedDocumentRead.model_validate(parsed_document)
+
+
+@router.get("/{file_id}/versions/{version_id}/parsed", response_model=ParsedDocumentRead)
+async def get_version_parsed_document(
+    project_id: UUID,
+    file_id: UUID,
+    version_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ParsedDocumentRead:
+    parsed_document = await service.get_parsed_document_for_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=version_id,
+        user_id=current_user.id,
+    )
+    return ParsedDocumentRead.model_validate(parsed_document)

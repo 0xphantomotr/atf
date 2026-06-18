@@ -31,3 +31,15 @@ class FileVersionRead(BaseModel):
 class ProjectFileUploadRead(BaseModel):
     file: ProjectFileRead
     version: FileVersionRead
+
+
+class ParsedDocumentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    file_version_id: UUID
+    document_type: str | None
+    language: str
+    page_count: int | None
+    text_content: str | None
+    document_metadata: dict
