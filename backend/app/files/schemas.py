@@ -27,3 +27,7 @@ class FileVersionRead(BaseModel):
     size_bytes: int
     parse_status: str
 
+
+class ProjectFileUploadRead(BaseModel):
+    file: ProjectFileRead
+    version: FileVersionRead

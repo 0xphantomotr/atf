@@ -1,38 +1,100 @@
 from uuid import UUID
 
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotImplementedYet
+from app.db.session import get_session
+from app.files import service
+from app.files.schemas import FileVersionRead, ProjectFileRead, ProjectFileUploadRead
+from app.users.dependencies import get_current_user
+from app.users.models import User
 
 router = APIRouter(prefix="/projects/{project_id}/files", tags=["files"])
 
 
-@router.post("")
-async def upload_file(project_id: UUID, file: UploadFile) -> None:
-    _ = project_id, file
-    raise NotImplementedYet()
+@router.post("", response_model=ProjectFileUploadRead, status_code=status.HTTP_201_CREATED)
+async def upload_file(
+    project_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectFileUploadRead:
+    project_file, file_version = await service.create_project_file(
+        session,
+        project_id=project_id,
+        upload=file,
+        user_id=current_user.id,
+    )
+    return ProjectFileUploadRead(
+        file=ProjectFileRead.model_validate(project_file),
+        version=FileVersionRead.model_validate(file_version),
+    )
 
 
-@router.get("")
-async def list_files(project_id: UUID) -> None:
-    _ = project_id
-    raise NotImplementedYet()
+@router.get("", response_model=list[ProjectFileRead])
+async def list_files(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[ProjectFileRead]:
+    files = await service.list_project_files(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
+    return [ProjectFileRead.model_validate(project_file) for project_file in files]
 
 
-@router.get("/{file_id}")
-async def get_file(project_id: UUID, file_id: UUID) -> None:
-    _ = project_id, file_id
-    raise NotImplementedYet()
+@router.get("/{file_id}", response_model=ProjectFileRead)
+async def get_file(
+    project_id: UUID,
+    file_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectFileRead:
+    project_file = await service.get_project_file(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        user_id=current_user.id,
+    )
+    return ProjectFileRead.model_validate(project_file)
 
 
-@router.post("/{file_id}/versions")
-async def create_file_version(project_id: UUID, file_id: UUID, file: UploadFile) -> None:
-    _ = project_id, file_id, file
-    raise NotImplementedYet()
+@router.post(
+    "/{file_id}/versions",
+    response_model=FileVersionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_file_version(
+    project_id: UUID,
+    file_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> FileVersionRead:
+    file_version = await service.create_file_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        upload=file,
+        user_id=current_user.id,
+    )
+    return FileVersionRead.model_validate(file_version)
 
 
-@router.get("/{file_id}/versions")
-async def list_file_versions(project_id: UUID, file_id: UUID) -> None:
-    _ = project_id, file_id
-    raise NotImplementedYet()
+@router.get("/{file_id}/versions", response_model=list[FileVersionRead])
+async def list_file_versions(
+    project_id: UUID,
+    file_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[FileVersionRead]:
+    versions = await service.list_file_versions(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        user_id=current_user.id,
+    )
+    return [FileVersionRead.model_validate(version) for version in versions]
 
