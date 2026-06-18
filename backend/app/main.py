@@ -7,6 +7,7 @@ from app.laws.routes import router as laws_router
 from app.projects.routes import router as projects_router
 from app.reviews.routes import router as reviews_router
 from app.telegram.webhook import router as telegram_router
+from app.users.routes import router as users_router
 
 
 def create_app() -> FastAPI:
@@ -18,6 +19,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(telegram_router)
+    app.include_router(users_router)
     app.include_router(projects_router)
     app.include_router(files_router)
     app.include_router(laws_router)
@@ -26,4 +28,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

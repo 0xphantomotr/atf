@@ -34,7 +34,7 @@ services:
       - ../.env
     volumes:
       - ../backend:/app
-    command: python -m app.workers.runner
+    command: dramatiq app.workers.jobs --processes 1 --threads 4
     depends_on:
       - postgres
       - redis
@@ -80,4 +80,3 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
-
