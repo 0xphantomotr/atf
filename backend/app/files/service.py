@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.files.classifier import classify_document
 from app.files.models import FileVersion, ParsedDocument, ProjectFile
 from app.files.parser import is_supported_filename
 from app.files.storage import ensure_bucket_exists, get_minio_client
@@ -327,6 +328,31 @@ async def get_parsed_document_for_version(
     return parsed_document
 
 
+async def classify_parsed_document_for_version(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_id: uuid.UUID,
+    version_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> ParsedDocument:
+    file_version = await get_file_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=version_id,
+        user_id=user_id,
+    )
+    parsed_document = await _get_parsed_document_by_version_id(
+        session,
+        version_id=version_id,
+    )
+    _apply_document_classification(parsed_document, file_version)
+    await session.commit()
+    await session.refresh(parsed_document)
+    return parsed_document
+
+
 async def get_parsed_document_for_current_version(
     session: AsyncSession,
     *,
@@ -334,6 +360,50 @@ async def get_parsed_document_for_current_version(
     file_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> ParsedDocument:
+    file_version = await _get_current_file_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        user_id=user_id,
+    )
+    return await get_parsed_document_for_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=file_version.id,
+        user_id=user_id,
+    )
+
+
+async def classify_parsed_document_for_current_version(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> ParsedDocument:
+    file_version = await _get_current_file_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        user_id=user_id,
+    )
+    return await classify_parsed_document_for_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=file_version.id,
+        user_id=user_id,
+    )
+
+
+async def _get_current_file_version(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> FileVersion:
     project_file = await get_project_file(
         session,
         project_id=project_id,
@@ -352,10 +422,36 @@ async def get_parsed_document_for_current_version(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Versioni aktual i dokumentit nuk u gjet.",
         )
-    return await get_parsed_document_for_version(
-        session,
-        project_id=project_id,
-        file_id=file_id,
-        version_id=file_version.id,
-        user_id=user_id,
+    return file_version
+
+
+async def _get_parsed_document_by_version_id(
+    session: AsyncSession,
+    *,
+    version_id: uuid.UUID,
+) -> ParsedDocument:
+    result = await session.execute(
+        select(ParsedDocument).where(ParsedDocument.file_version_id == version_id)
     )
+    parsed_document = result.scalar_one_or_none()
+    if parsed_document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dokumenti nuk është përpunuar ende.",
+        )
+    return parsed_document
+
+
+def _apply_document_classification(
+    parsed_document: ParsedDocument,
+    file_version: FileVersion,
+) -> None:
+    classification = classify_document(
+        file_version.original_filename,
+        parsed_document.text_content,
+    )
+    metadata = dict(parsed_document.document_metadata or {})
+    metadata["classification"] = classification.as_metadata()
+
+    parsed_document.document_type = classification.document_type
+    parsed_document.document_metadata = metadata

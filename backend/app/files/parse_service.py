@@ -7,6 +7,7 @@ from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.files.classifier import classify_document
 from app.files.models import FileVersion, ParsedDocument, ProjectFile
 from app.files.storage import get_minio_client
 
@@ -90,6 +91,12 @@ async def _save_parsed_document(
     page_count: int,
     metadata: dict,
 ) -> None:
+    classification = classify_document(file_version.original_filename, text_content)
+    parsed_metadata = {
+        **metadata,
+        "classification": classification.as_metadata(),
+    }
+
     result = await session.execute(
         select(ParsedDocument).where(ParsedDocument.file_version_id == file_version.id)
     )
@@ -98,18 +105,19 @@ async def _save_parsed_document(
     if parsed_document is None:
         parsed_document = ParsedDocument(
             file_version_id=file_version.id,
-            document_type=None,
+            document_type=classification.document_type,
             language="sq-AL",
             page_count=page_count,
             text_content=text_content,
-            document_metadata=metadata,
+            document_metadata=parsed_metadata,
         )
         session.add(parsed_document)
         return
 
+    parsed_document.document_type = classification.document_type
     parsed_document.page_count = page_count
     parsed_document.text_content = text_content
-    parsed_document.document_metadata = metadata
+    parsed_document.document_metadata = parsed_metadata
 
 
 async def get_project_id_for_file_version(
@@ -123,4 +131,3 @@ async def get_project_id_for_file_version(
         .where(FileVersion.id == file_version_id)
     )
     return result.scalar_one_or_none()
-

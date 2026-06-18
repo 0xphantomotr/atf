@@ -136,3 +136,37 @@ async def get_version_parsed_document(
         user_id=current_user.id,
     )
     return ParsedDocumentRead.model_validate(parsed_document)
+
+
+@router.post("/{file_id}/classify", response_model=ParsedDocumentRead)
+async def classify_current_parsed_document(
+    project_id: UUID,
+    file_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ParsedDocumentRead:
+    parsed_document = await service.classify_parsed_document_for_current_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        user_id=current_user.id,
+    )
+    return ParsedDocumentRead.model_validate(parsed_document)
+
+
+@router.post("/{file_id}/versions/{version_id}/classify", response_model=ParsedDocumentRead)
+async def classify_version_parsed_document(
+    project_id: UUID,
+    file_id: UUID,
+    version_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ParsedDocumentRead:
+    parsed_document = await service.classify_parsed_document_for_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=version_id,
+        user_id=current_user.id,
+    )
+    return ParsedDocumentRead.model_validate(parsed_document)
