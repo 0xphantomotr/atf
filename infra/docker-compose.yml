@@ -34,7 +34,7 @@ services:
       - ../.env
     volumes:
       - ../backend:/app
-    command: dramatiq app.workers.jobs --processes 1 --threads 4
+    command: dramatiq app.workers.jobs --processes 1 --threads 1
     depends_on:
       - postgres
       - redis

@@ -16,6 +16,7 @@ from app.files.models import FileVersion, ProjectFile
 from app.files.parser import is_supported_filename
 from app.files.storage import ensure_bucket_exists, get_minio_client
 from app.projects.service import get_project
+from app.workers.jobs import parse_file_version
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 SPOOL_MAX_BYTES = 10 * 1024 * 1024
@@ -147,6 +148,7 @@ async def create_project_file(
     await session.commit()
     await session.refresh(project_file)
     await session.refresh(file_version)
+    parse_file_version.send(str(file_version.id))
     return project_file, file_version
 
 
@@ -254,6 +256,7 @@ async def create_file_version(
     session.add(file_version)
     await session.commit()
     await session.refresh(file_version)
+    parse_file_version.send(str(file_version.id))
     return file_version
 
 
