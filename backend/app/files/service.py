@@ -1,8 +1,10 @@
 import hashlib
+import mimetypes
 import re
 import unicodedata
 import uuid
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 from tempfile import SpooledTemporaryFile
 from typing import BinaryIO
 
@@ -21,6 +23,9 @@ from app.workers.jobs import parse_file_version
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 SPOOL_MAX_BYTES = 10 * 1024 * 1024
+MAX_BULK_FILES = 250
+MAX_ZIP_EXTRACTED_BYTES = 300 * 1024 * 1024
+ZIP_IMPORT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".jpg", ".jpeg", ".png"}
 
 
 def normalize_filename(filename: str) -> str:
@@ -65,7 +70,13 @@ async def _copy_upload_to_spooled_file(upload: UploadFile) -> tuple[BinaryIO, in
     return spooled, size_bytes, sha256.hexdigest()
 
 
-def _upload_to_minio(*, object_name: str, data: BinaryIO, size_bytes: int, content_type: str) -> None:
+def _upload_to_minio(
+    *,
+    object_name: str,
+    data: BinaryIO,
+    size_bytes: int,
+    content_type: str,
+) -> None:
     client = get_minio_client()
     try:
         ensure_bucket_exists(client, settings.minio_bucket)
@@ -83,44 +94,65 @@ def _upload_to_minio(*, object_name: str, data: BinaryIO, size_bytes: int, conte
         ) from exc
 
 
-async def create_project_file(
+def _content_type_for_filename(filename: str) -> str:
+    return mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+
+def _is_supported_zip_member(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ZIP_IMPORT_EXTENSIONS
+
+
+def _unsupported_file_reason(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".doc":
+        return "format Word .doc nuk lexohet ende; konvertojeni në .docx"
+    if suffix == ".mpp":
+        return "format Microsoft Project .mpp nuk mbështetet ende"
+    return "format i pambështetur"
+
+
+def _safe_zip_member_filename(filename: str) -> str:
+    normalized_name = filename.replace("\\", "/")
+    parts = [
+        part
+        for part in PurePosixPath(normalized_name).parts
+        if part not in {"", ".", "..", "/"}
+    ]
+    if not parts:
+        return ""
+    return "/".join(parts)
+
+
+async def _create_project_file_from_data(
     session: AsyncSession,
     *,
     project_id: uuid.UUID,
-    upload: UploadFile,
+    original_filename: str,
+    content_type: str,
+    data: BinaryIO,
+    size_bytes: int,
+    sha256_hash: str,
     user_id: uuid.UUID,
 ) -> tuple[ProjectFile, FileVersion]:
-    await get_project(session, project_id=project_id, user_id=user_id)
-
-    if not upload.filename or not is_supported_filename(upload.filename):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Formati nuk mbështetet. Ngarkoni PDF, DOCX, XLSX, ZIP, JPG ose PNG.",
-        )
-
-    normalized_filename = normalize_filename(upload.filename)
-    content_type = upload.content_type or "application/octet-stream"
+    normalized_filename = normalize_filename(original_filename)
     file_id = uuid.uuid4()
     version_id = uuid.uuid4()
     storage_path = (
         f"projects/{project_id}/files/{file_id}/versions/1/{version_id}-{normalized_filename}"
     )
 
-    data, size_bytes, sha256_hash = await _copy_upload_to_spooled_file(upload)
-    try:
-        _upload_to_minio(
-            object_name=storage_path,
-            data=data,
-            size_bytes=size_bytes,
-            content_type=content_type,
-        )
-    finally:
-        data.close()
+    data.seek(0)
+    _upload_to_minio(
+        object_name=storage_path,
+        data=data,
+        size_bytes=size_bytes,
+        content_type=content_type,
+    )
 
     project_file = ProjectFile(
         id=file_id,
         project_id=project_id,
-        original_filename=upload.filename,
+        original_filename=original_filename,
         normalized_filename=normalized_filename,
         mime_type=content_type,
         current_version=1,
@@ -133,7 +165,7 @@ async def create_project_file(
         id=version_id,
         file_id=file_id,
         version_number=1,
-        original_filename=upload.filename,
+        original_filename=original_filename,
         storage_bucket=settings.minio_bucket,
         storage_path=storage_path,
         sha256_hash=sha256_hash,
@@ -151,6 +183,199 @@ async def create_project_file(
     await session.refresh(file_version)
     parse_file_version.send(str(file_version.id))
     return project_file, file_version
+
+
+async def create_project_file(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    upload: UploadFile,
+    user_id: uuid.UUID,
+) -> tuple[ProjectFile, FileVersion]:
+    await get_project(session, project_id=project_id, user_id=user_id)
+
+    if not upload.filename or not is_supported_filename(upload.filename):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Formati nuk mbështetet. Ngarkoni PDF, DOCX, XLSX, ZIP, JPG ose PNG.",
+        )
+
+    content_type = upload.content_type or "application/octet-stream"
+
+    data, size_bytes, sha256_hash = await _copy_upload_to_spooled_file(upload)
+    try:
+        return await _create_project_file_from_data(
+            session,
+            project_id=project_id,
+            original_filename=upload.filename,
+            content_type=content_type,
+            data=data,
+            size_bytes=size_bytes,
+            sha256_hash=sha256_hash,
+            user_id=user_id,
+        )
+    finally:
+        data.close()
+
+
+async def create_project_files_bulk(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    uploads: list[UploadFile],
+    user_id: uuid.UUID,
+) -> tuple[list[tuple[ProjectFile, FileVersion]], list[dict[str, str]]]:
+    await get_project(session, project_id=project_id, user_id=user_id)
+
+    if len(uploads) > MAX_BULK_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Mund të ngarkohen maksimumi {MAX_BULK_FILES} dokumente njëherësh.",
+        )
+
+    uploaded: list[tuple[ProjectFile, FileVersion]] = []
+    skipped: list[dict[str, str]] = []
+    for upload in uploads:
+        filename = upload.filename or "pa-emër"
+        if not upload.filename or not is_supported_filename(upload.filename):
+            skipped.append({"filename": filename, "reason": _unsupported_file_reason(filename)})
+            continue
+
+        data, size_bytes, sha256_hash = await _copy_upload_to_spooled_file(upload)
+        try:
+            uploaded.append(
+                await _create_project_file_from_data(
+                    session,
+                    project_id=project_id,
+                    original_filename=upload.filename,
+                    content_type=upload.content_type or _content_type_for_filename(upload.filename),
+                    data=data,
+                    size_bytes=size_bytes,
+                    sha256_hash=sha256_hash,
+                    user_id=user_id,
+                )
+            )
+        finally:
+            data.close()
+
+    return uploaded, skipped
+
+
+async def import_project_files_zip(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    upload: UploadFile,
+    user_id: uuid.UUID,
+) -> tuple[list[tuple[ProjectFile, FileVersion]], list[dict[str, str]]]:
+    await get_project(session, project_id=project_id, user_id=user_id)
+
+    if not upload.filename or Path(upload.filename).suffix.lower() != ".zip":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ngarkoni një arkiv ZIP të eksportuar nga dosja teknike.",
+        )
+
+    zip_data, _, _ = await _copy_upload_to_spooled_file(upload)
+    uploaded: list[tuple[ProjectFile, FileVersion]] = []
+    skipped: list[dict[str, str]] = []
+    extracted_bytes = 0
+
+    try:
+        try:
+            with zipfile.ZipFile(zip_data) as archive:
+                file_infos = [info for info in archive.infolist() if not info.is_dir()]
+                if len(file_infos) > MAX_BULK_FILES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"ZIP përmban më shumë se {MAX_BULK_FILES} dokumente.",
+                    )
+
+                for info in file_infos:
+                    safe_filename = _safe_zip_member_filename(info.filename)
+                    if not safe_filename:
+                        skipped.append({"filename": info.filename, "reason": "emër i pavlefshëm"})
+                        continue
+                    if not _is_supported_zip_member(safe_filename):
+                        skipped.append(
+                            {
+                                "filename": safe_filename,
+                                "reason": _unsupported_file_reason(safe_filename),
+                            }
+                        )
+                        continue
+                    if info.file_size > MAX_UPLOAD_BYTES:
+                        skipped.append(
+                            {"filename": safe_filename, "reason": "dokument më i madh se 50 MB"}
+                        )
+                        continue
+
+                    extracted_bytes += info.file_size
+                    if extracted_bytes > MAX_ZIP_EXTRACTED_BYTES:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail="ZIP tejkalon kufirin total të importimit prej 300 MB.",
+                        )
+
+                    data, size_bytes, sha256_hash = _copy_zip_member_to_spooled_file(
+                        archive,
+                        info,
+                    )
+                    try:
+                        uploaded.append(
+                            await _create_project_file_from_data(
+                                session,
+                                project_id=project_id,
+                                original_filename=safe_filename,
+                                content_type=_content_type_for_filename(safe_filename),
+                                data=data,
+                                size_bytes=size_bytes,
+                                sha256_hash=sha256_hash,
+                                user_id=user_id,
+                            )
+                        )
+                    finally:
+                        data.close()
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Arkivi ZIP nuk mund të lexohet.",
+            ) from exc
+    finally:
+        zip_data.close()
+
+    return uploaded, skipped
+
+
+def _copy_zip_member_to_spooled_file(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+) -> tuple[BinaryIO, int, str]:
+    sha256 = hashlib.sha256()
+    size_bytes = 0
+    spooled = SpooledTemporaryFile(max_size=SPOOL_MAX_BYTES, mode="w+b")
+
+    with archive.open(info) as member:
+        while chunk := member.read(1024 * 1024):
+            size_bytes += len(chunk)
+            if size_bytes > MAX_UPLOAD_BYTES:
+                spooled.close()
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"{info.filename} është më i madh se kufiri prej 50 MB.",
+                )
+            sha256.update(chunk)
+            spooled.write(chunk)
+
+    if size_bytes == 0:
+        spooled.close()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{info.filename} është bosh.",
+        )
+
+    spooled.seek(0)
+    return spooled, size_bytes, sha256.hexdigest()
 
 
 async def list_project_files(

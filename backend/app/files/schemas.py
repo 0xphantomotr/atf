@@ -33,6 +33,16 @@ class ProjectFileUploadRead(BaseModel):
     version: FileVersionRead
 
 
+class BulkFileSkipRead(BaseModel):
+    filename: str
+    reason: str
+
+
+class BulkFileUploadRead(BaseModel):
+    uploaded: list[ProjectFileUploadRead]
+    skipped: list[BulkFileSkipRead]
+
+
 class ParsedDocumentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

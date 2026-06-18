@@ -12,7 +12,10 @@ def test_supported_filename() -> None:
 
 def test_basic_classifier_is_conservative() -> None:
     assert classify_document_type("file.txt", "pa lidhje")[0] == "unknown"
-    assert classify_document_type("raport_45.pdf", "raportim 45 ditor")[0] == "forty_five_day_report"
+    assert (
+        classify_document_type("raport_45.pdf", "raportim 45 ditor")[0]
+        == "forty_five_day_report"
+    )
 
 
 def test_classifier_tracks_confidence_and_evidence() -> None:
@@ -29,6 +32,45 @@ def test_classifier_handles_common_vkm_610_documents() -> None:
     assert classify_document_type("leje_ndertimi.pdf", "")[0] == "construction_permit"
     assert classify_document_type("libri_i_kantierit.pdf", "")[0] == "site_book"
     assert classify_document_type("akt_kontrolli_0.00.pdf", "")[0] == "level_0_00_control_act"
+
+
+def test_classifier_handles_real_dossier_filenames() -> None:
+    examples = {
+        "0. Kontrate Mbiqkyrsin me z. Oltion Kaba.docx": "supervisor_contract",
+        "0.0 Ditari i Punimeve OK.docx": "daily_site_log",
+        "1.1 Njoftim Fillim Punimesh OK.docx": "start_works_notification",
+        "1.2 Proces Verbal Akt Dorezim Sheshi OK.docx": "site_handover_act",
+        "1.5 [1] Akt kontroll i ngritjes se kantierit.docx": "site_setup_control_act",
+        "1.9.1.1 Proces verb.punim.mask.Form-1(plintat).docx": "hidden_works_minutes",
+        "2.0 [3] Akt kontrolli Përfundimi i themeleve.docx": (
+            "foundation_completion_and_level_0_00_control_act"
+        ),
+        "3.1 [4] Akt Kontrolli Përfundimi i karabinasë.docx": (
+            "structural_frame_completion_control_act"
+        ),
+        "4.1 [5] Akt kontrolli Përfundimi i fasadave dhe rifiniturave.docx": (
+            "facade_and_finishing_completion_control_act"
+        ),
+        "5.1 [6] Akt kontrolli Përfundimi i sistemit të jashtëm.docx": (
+            "external_system_completion_control_act"
+        ),
+        "6.2 Projekt per mirmbajtjen e Objektit.docx": "maintenance_project",
+        "7. Deklarat Konformiteti Sipermarresi.docx": (
+            "construction_permit_conformity_declaration"
+        ),
+    }
+
+    for filename, expected_type in examples.items():
+        assert classify_document_type(filename, "")[0] == expected_type
+
+
+def test_supervisor_contract_is_not_classified_as_report_when_it_mentions_45_days() -> None:
+    result = classify_document_type(
+        "0. Kontrate Mbiqkyrsin me z. Oltion Kaba.docx",
+        "Kontrate me mbikqyresin e punimeve. Detyrimi per raportim cdo 45 dite.",
+    )
+
+    assert result[0] == "supervisor_contract"
 
 
 def test_classifier_does_not_treat_vkm_law_as_project_document() -> None:

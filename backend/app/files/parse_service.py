@@ -21,14 +21,17 @@ async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUI
     await session.commit()
 
     suffix = Path(file_version.original_filename).suffix.lower()
-    if suffix != ".pdf":
-        file_version.parse_status = "unsupported"
-        await session.commit()
-        return
-
     try:
-        pdf_bytes = _load_file_version_bytes(file_version)
-        parsed = _parse_pdf(pdf_bytes)
+        file_bytes = _load_file_version_bytes(file_version)
+        if suffix == ".pdf":
+            parsed = _parse_pdf(file_bytes)
+        elif suffix == ".docx":
+            parsed = _parse_docx(file_bytes)
+        else:
+            file_version.parse_status = "unsupported"
+            await session.commit()
+            return
+
         await _save_parsed_document(
             session,
             file_version=file_version,
@@ -81,6 +84,43 @@ def _parse_pdf(pdf_bytes: bytes) -> dict:
             "pages_with_text": pages_with_text,
         },
     }
+
+
+def _parse_docx(docx_bytes: bytes) -> dict:
+    from docx import Document
+
+    document = Document(BytesIO(docx_bytes))
+    text_blocks: list[str] = []
+
+    for paragraph in document.paragraphs:
+        text = paragraph.text.strip()
+        if text:
+            text_blocks.append(text)
+
+    for table_index, table in enumerate(document.tables, start=1):
+        table_rows: list[str] = []
+        for row in table.rows:
+            cells = [_normalize_cell_text(cell.text) for cell in row.cells]
+            cells = [cell for cell in cells if cell]
+            if cells:
+                table_rows.append(" | ".join(cells))
+        if table_rows:
+            text_blocks.append(f"--- Tabela {table_index} ---\n" + "\n".join(table_rows))
+
+    return {
+        "text_content": "\n\n".join(text_blocks),
+        "page_count": None,
+        "metadata": {
+            "parser": "python-docx",
+            "paragraph_count": len(document.paragraphs),
+            "table_count": len(document.tables),
+            "text_blocks": len(text_blocks),
+        },
+    }
+
+
+def _normalize_cell_text(value: str) -> str:
+    return " ".join(value.split())
 
 
 async def _save_parsed_document(

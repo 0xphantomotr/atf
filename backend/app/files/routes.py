@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_session
 from app.files import service
 from app.files.schemas import (
+    BulkFileSkipRead,
+    BulkFileUploadRead,
     FileVersionRead,
     ParsedDocumentRead,
     ProjectFileRead,
@@ -34,6 +36,54 @@ async def upload_file(
         file=ProjectFileRead.model_validate(project_file),
         version=FileVersionRead.model_validate(file_version),
     )
+
+
+def _serialize_upload_result(
+    uploaded: list[tuple[object, object]],
+    skipped: list[dict[str, str]],
+) -> BulkFileUploadRead:
+    return BulkFileUploadRead(
+        uploaded=[
+            ProjectFileUploadRead(
+                file=ProjectFileRead.model_validate(project_file),
+                version=FileVersionRead.model_validate(file_version),
+            )
+            for project_file, file_version in uploaded
+        ],
+        skipped=[BulkFileSkipRead(**skip) for skip in skipped],
+    )
+
+
+@router.post("/bulk", response_model=BulkFileUploadRead, status_code=status.HTTP_201_CREATED)
+async def upload_files_bulk(
+    project_id: UUID,
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> BulkFileUploadRead:
+    uploaded, skipped = await service.create_project_files_bulk(
+        session,
+        project_id=project_id,
+        uploads=files,
+        user_id=current_user.id,
+    )
+    return _serialize_upload_result(uploaded, skipped)
+
+
+@router.post("/import-zip", response_model=BulkFileUploadRead, status_code=status.HTTP_201_CREATED)
+async def import_files_zip(
+    project_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> BulkFileUploadRead:
+    uploaded, skipped = await service.import_project_files_zip(
+        session,
+        project_id=project_id,
+        upload=file,
+        user_id=current_user.id,
+    )
+    return _serialize_upload_result(uploaded, skipped)
 
 
 @router.get("", response_model=list[ProjectFileRead])

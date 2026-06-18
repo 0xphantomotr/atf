@@ -42,6 +42,18 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         "akt kontroll + themele + kuota +0.00",
     ),
     DocumentSignature(
+        "foundation_completion_and_level_0_00_control_act",
+        ("akt kontroll", "perfundim", "theme"),
+        0.89,
+        "akt kontroll + perfundim themele",
+    ),
+    DocumentSignature(
+        "foundation_completion_and_level_0_00_control_act",
+        ("proces verbal", "theme", "0.00"),
+        0.86,
+        "proces verbal + themele + kuota 0.00",
+    ),
+    DocumentSignature(
         "level_0_00_control_act",
         ("akt kontroll", "0.00"),
         0.9,
@@ -78,6 +90,12 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         "akt kontroll + rrjete te jashtme",
     ),
     DocumentSignature(
+        "external_system_completion_control_act",
+        ("akt kontroll", "sistem", "jasht"),
+        0.89,
+        "akt kontroll + sistem i jashtem",
+    ),
+    DocumentSignature(
         "site_setup_control_act",
         ("akt kontroll", "ngritje", "kantier"),
         0.88,
@@ -94,6 +112,12 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         ("deklarat", "perputh", "leje ndertimi"),
         0.9,
         "deklarate perputhshmerie + leje ndertimi",
+    ),
+    DocumentSignature(
+        "construction_permit_conformity_declaration",
+        ("deklarat", "konformitet"),
+        0.84,
+        "deklarate konformiteti",
     ),
     DocumentSignature(
         "professional_liability_insurance_policy",
@@ -138,6 +162,12 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         "procesverbal fillimi punimesh",
     ),
     DocumentSignature(
+        "start_interruption_extension_completion_minutes",
+        ("procesverbal", "perfundim", "punim"),
+        0.87,
+        "procesverbal perfundimi punimesh",
+    ),
+    DocumentSignature(
         "completion_minutes",
         ("procesverbal", "perfundim", "punim"),
         0.86,
@@ -170,8 +200,20 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
     DocumentSignature(
         "supervisor_contract",
         ("kontrat", "mbikeqyr"),
-        0.86,
+        0.93,
         "kontrate + mbikeqyres",
+    ),
+    DocumentSignature(
+        "supervisor_contract",
+        ("kontrat", "mbikqyr"),
+        0.93,
+        "kontrate + mbikqyres",
+    ),
+    DocumentSignature(
+        "supervisor_contract",
+        ("kontrat", "mbiqkyr"),
+        0.91,
+        "kontrate + mbikqyres",
     ),
     DocumentSignature(
         "development_permit",
@@ -288,6 +330,12 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         "punime te maskuara",
     ),
     DocumentSignature(
+        "hidden_works_minutes",
+        ("punim", "mask"),
+        0.82,
+        "punime te maskuara",
+    ),
+    DocumentSignature(
         "material_quality_certificate",
         ("certifikat", "ciles", "material"),
         0.86,
@@ -304,6 +352,18 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         ("deklarat", "teknik"),
         0.82,
         "deklarate teknike",
+    ),
+    DocumentSignature(
+        "technical_declaration",
+        ("deklarat", "mbikqyr"),
+        0.8,
+        "deklarate e mbikeqyresit",
+    ),
+    DocumentSignature(
+        "technical_declaration",
+        ("deklarat", "sipermarres"),
+        0.8,
+        "deklarate e sipermarresit",
     ),
     DocumentSignature(
         "safety_documentation",
@@ -345,6 +405,12 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         "maintenance_project",
         ("projekt", "mirembajt"),
         0.82,
+        "projekt mirembajtjeje",
+    ),
+    DocumentSignature(
+        "maintenance_project",
+        ("projekt", "mirmbajt"),
+        0.8,
         "projekt mirembajtjeje",
     ),
     DocumentSignature(
