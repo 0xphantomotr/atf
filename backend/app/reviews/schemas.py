@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +22,26 @@ class ReviewJobRead(BaseModel):
     language: str
     output_format: str
     progress: int
+
+
+class GeneratedOutputRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    review_job_id: UUID
+    project_id: UUID
+    output_type: str
+    language: str
+    storage_bucket: str | None
+    storage_path: str | None
+    text_preview: str | None
+    output_metadata: dict
+    created_at: datetime
+
+
+class JobOutputRead(BaseModel):
+    job: ReviewJobRead
+    outputs: list[GeneratedOutputRead]
 
 
 class ReviewFindingRead(BaseModel):
@@ -50,4 +71,3 @@ class StructuredFinding(BaseModel):
     required_action: str | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     status: str = "open"
-

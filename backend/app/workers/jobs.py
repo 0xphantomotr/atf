@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.db import models  # noqa: F401
 from app.db.session import AsyncSessionLocal, engine
 from app.files.parse_service import parse_file_version as parse_file_version_service
+from app.reviews.service import run_queued_review_job as run_queued_review_job_service
 
 redis_broker = RedisBroker(url=settings.redis_url)
 dramatiq.set_broker(redis_broker)
@@ -31,7 +32,18 @@ async def _parse_file_version(file_version_id: str) -> None:
 
 @dramatiq.actor
 def run_review_job(review_job_id: str) -> None:
-    _ = review_job_id
+    asyncio.run(_run_review_job(review_job_id))
+
+
+async def _run_review_job(review_job_id: str) -> None:
+    try:
+        async with AsyncSessionLocal() as session:
+            await run_queued_review_job_service(
+                session,
+                job_id=uuid.UUID(review_job_id),
+            )
+    finally:
+        await engine.dispose()
 
 
 @dramatiq.actor

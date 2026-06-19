@@ -10,8 +10,29 @@
         font-size: 12px;
         line-height: 1.5;
       }
-      h1, h2 {
+      h1, h2, h3 {
         color: #102030;
+      }
+      h1 {
+        border-bottom: 2px solid #102030;
+        padding-bottom: 8px;
+      }
+      .muted {
+        color: #5d6773;
+      }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin: 12px 0;
+      }
+      .summary-item {
+        border: 1px solid #c7cdd4;
+        padding: 8px;
+      }
+      .summary-item strong {
+        display: block;
+        font-size: 18px;
       }
       table {
         border-collapse: collapse;
@@ -27,15 +48,70 @@
       th {
         background: #eef2f6;
       }
+      ul {
+        margin-top: 8px;
+        padding-left: 18px;
+      }
     </style>
   </head>
   <body>
     <h1>{{ report.title }}</h1>
+
+    <p class="muted">Gjeneruar më: {{ report.generated_at.strftime("%Y-%m-%d %H:%M") }}</p>
+
+    <h2>Të dhënat e projektit</h2>
+    <table>
+      <tbody>
+        <tr>
+          <th>Projekti</th>
+          <td>{{ report.project.name }}</td>
+        </tr>
+        <tr>
+          <th>Tipi</th>
+          <td>{{ report.project.project_type }}</td>
+        </tr>
+        <tr>
+          <th>Faza</th>
+          <td>{{ report.project.stage }}</td>
+        </tr>
+        <tr>
+          <th>Vendndodhja</th>
+          <td>{{ report.project.location or "-" }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Baza ligjore</h2>
+    <p>{{ report.law_scope | join(", ") }}</p>
+
+    <h2>Dokumentet e kontrolluara</h2>
+    <div class="summary-grid">
+      <div class="summary-item">
+        <strong>{{ report.document_summary.total_files }}</strong>
+        Skedarë gjithsej
+      </div>
+      <div class="summary-item">
+        <strong>{{ report.document_summary.parsed_files }}</strong>
+        Të lexuar
+      </div>
+      <div class="summary-item">
+        <strong>{{ report.document_summary.classified_files }}</strong>
+        Të klasifikuar
+      </div>
+      <div class="summary-item">
+        <strong>{{ report.document_summary.unknown_files }}</strong>
+        Të paklasifikuar
+      </div>
+    </div>
+
     <h2>Përmbledhje ekzekutive</h2>
     <p>{{ report.summary }}</p>
+
     <h2>Rekomandimi</h2>
     <p>{{ report.recommendation }}</p>
+
     <h2>Tabela e gjetjeve</h2>
+    {% if report.findings %}
     <table>
       <thead>
         <tr>
@@ -56,6 +132,72 @@
         {% endfor %}
       </tbody>
     </table>
+    {% else %}
+    <p>Nuk u identifikuan gjetje të hapura nga rregullat e aplikuara.</p>
+    {% endif %}
+
+    {% if report.findings %}
+    <h2>Gjetjet e detajuara</h2>
+    {% for finding in report.findings %}
+    <h3>{{ finding.rule_code or "Gjetje" }} - {{ finding.title }}</h3>
+    <p>{{ finding.description }}</p>
+    <p><strong>Baza ligjore:</strong> {{ finding.law_reference or "-" }}</p>
+    <p><strong>Veprimi i kërkuar:</strong> {{ finding.required_action or "-" }}</p>
+    {% if finding.evidence.missing_document_types %}
+    <p><strong>Dokumente që mungojnë:</strong></p>
+    <ul>
+      {% for document_type in finding.evidence.missing_document_types %}
+      <li>{{ document_type }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+
+    <h2>Veprimet e kërkuara</h2>
+    {% if report.required_actions %}
+    <ul>
+      {% for action in report.required_actions %}
+      <li>{{ action }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p>Nuk ka veprime të kërkuara nga rregullat e aplikuara.</p>
+    {% endif %}
+
+    <h2>Shtojca - lista e dokumenteve</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Dokumenti</th>
+          <th>Statusi</th>
+          <th>Klasifikimi</th>
+          <th>Besimi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for document in report.document_summary.checked_documents %}
+        <tr>
+          <td>{{ document.filename }}</td>
+          <td>{{ document.parse_status }}</td>
+          <td>{{ document.document_label or document.document_type or "-" }}</td>
+          <td>
+            {% if document.classification_confidence is not none %}
+            {{ "%.2f"|format(document.classification_confidence) }}
+            {% else %}
+            -
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Kufizimet e auditimit</h2>
+    <ul>
+      {% for appendix in report.appendices %}
+      <li>{{ appendix }}</li>
+      {% endfor %}
+    </ul>
   </body>
 </html>
-

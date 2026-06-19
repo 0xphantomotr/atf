@@ -1,12 +1,18 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotImplementedYet
 from app.db.session import get_session
 from app.reviews import service
-from app.reviews.schemas import GenerateRequest, ReviewFindingRead, ReviewJobRead
+from app.reviews.schemas import (
+    GenerateRequest,
+    GeneratedOutputRead,
+    JobOutputRead,
+    ReviewFindingRead,
+    ReviewJobRead,
+)
 from app.users.dependencies import get_current_user
 from app.users.models import User
 
@@ -24,7 +30,7 @@ async def generate(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ReviewJobRead:
-    job = await service.run_documentation_checklist(
+    job = await service.create_review_job(
         session,
         project_id=project_id,
         user_id=current_user.id,
@@ -57,13 +63,37 @@ async def get_job_findings(
     return [ReviewFindingRead.model_validate(finding) for finding in findings]
 
 
-@router.get("/jobs/{job_id}/output")
-async def get_job_output(job_id: UUID) -> None:
-    _ = job_id
-    raise NotImplementedYet()
+@router.get("/jobs/{job_id}/output", response_model=JobOutputRead)
+async def get_job_output(
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> JobOutputRead:
+    job, outputs = await service.get_review_job_outputs(
+        session,
+        job_id=job_id,
+        user_id=current_user.id,
+    )
+    return JobOutputRead(
+        job=ReviewJobRead.model_validate(job),
+        outputs=[GeneratedOutputRead.model_validate(output) for output in outputs],
+    )
 
 
 @router.get("/outputs/{output_id}")
-async def get_output(output_id: UUID) -> None:
-    _ = output_id
-    raise NotImplementedYet()
+async def get_output(
+    output_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    download = await service.download_generated_output(
+        session,
+        output_id=output_id,
+        user_id=current_user.id,
+    )
+    safe_filename = download.filename.replace('"', "")
+    return Response(
+        content=download.content,
+        media_type=download.content_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
