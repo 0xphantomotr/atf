@@ -17,6 +17,11 @@ from app.rules.models import Rule
 
 DEFAULT_LAW_SCOPE = ("VKM_610_2022",)
 
+DOCUMENT_TYPE_ALIASES = {
+    "foundation_completion_and_level_0_00_control_act": {"level_0_00_control_act"},
+    "start_works_notification": {"start_works_notification_letter"},
+}
+
 DOCUMENT_TYPE_LABELS = {
     "accounting_records": "dokumentacion kontabël",
     "approved_execution_project": "projekt zbatimi i miratuar",
@@ -339,13 +344,18 @@ def _build_missing_document_findings(
 
 
 def _found_document_types(current_files: list[CurrentFileSnapshot]) -> set[str]:
-    return {
-        current_file.document_type
-        for current_file in current_files
-        if current_file.parse_status == "parsed"
-        and current_file.document_type
-        and current_file.document_type != UNKNOWN_DOCUMENT_TYPE
-    }
+    found_types: set[str] = set()
+    for current_file in current_files:
+        if (
+            current_file.parse_status != "parsed"
+            or not current_file.document_type
+            or current_file.document_type == UNKNOWN_DOCUMENT_TYPE
+        ):
+            continue
+
+        found_types.add(current_file.document_type)
+        found_types.update(DOCUMENT_TYPE_ALIASES.get(current_file.document_type, set()))
+    return found_types
 
 
 def _rule_applies_to_project(rule: Rule, project: Project) -> bool:

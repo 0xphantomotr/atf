@@ -109,13 +109,13 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
     ),
     DocumentSignature(
         "construction_permit_conformity_declaration",
-        ("deklarat", "perputh", "leje ndertimi"),
+        ("deklar", "perputh", "leje ndertimi"),
         0.9,
         "deklarate perputhshmerie + leje ndertimi",
     ),
     DocumentSignature(
         "construction_permit_conformity_declaration",
-        ("deklarat", "konformitet"),
+        ("deklar", "konformitet"),
         0.84,
         "deklarate konformiteti",
     ),
@@ -349,19 +349,19 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
     ),
     DocumentSignature(
         "technical_declaration",
-        ("deklarat", "teknik"),
+        ("deklar", "teknik"),
         0.82,
         "deklarate teknike",
     ),
     DocumentSignature(
         "technical_declaration",
-        ("deklarat", "mbikqyr"),
+        ("deklar", "mbikqyr"),
         0.8,
         "deklarate e mbikeqyresit",
     ),
     DocumentSignature(
         "technical_declaration",
-        ("deklarat", "sipermarres"),
+        ("deklar", "sipermarres"),
         0.8,
         "deklarate e sipermarresit",
     ),
@@ -451,6 +451,284 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
     ),
 )
 
+FILENAME_SIGNATURES: tuple[DocumentSignature, ...] = (
+    DocumentSignature(
+        "professional_liability_insurance_policy",
+        ("polic", "sigur"),
+        0.98,
+        "filename: police sigurimi",
+    ),
+    DocumentSignature(
+        "professional_liability_insurance_policy",
+        ("kontrat", "sigur", "pergjegjesi"),
+        0.98,
+        "filename: kontrate sigurimi pergjegjesie",
+    ),
+    DocumentSignature(
+        "supervisor_contract",
+        ("kontrat", "mbikeqyr"),
+        0.98,
+        "filename: kontrate mbikeqyresi",
+    ),
+    DocumentSignature(
+        "supervisor_contract",
+        ("kontrat", "mbikqyr"),
+        0.98,
+        "filename: kontrate mbikqyresi",
+    ),
+    DocumentSignature(
+        "supervisor_contract",
+        ("kontrat", "mbiqkyr"),
+        0.96,
+        "filename: kontrate mbikeqyresi",
+    ),
+    DocumentSignature(
+        "contract_and_related_acts",
+        ("kontrat", "kolaudator"),
+        0.94,
+        "filename: kontrate kolaudatori",
+    ),
+    DocumentSignature(
+        "daily_site_log",
+        ("ditari", "punim"),
+        0.98,
+        "filename: ditari i punimeve",
+    ),
+    DocumentSignature(
+        "daily_site_log",
+        ("ditari", "objekt"),
+        0.98,
+        "filename: ditari i objektit",
+    ),
+    DocumentSignature(
+        "site_book",
+        ("libri", "kantier"),
+        0.98,
+        "filename: libri i kantierit",
+    ),
+    DocumentSignature(
+        "start_works_notification",
+        ("njoftim", "fillim", "punim"),
+        0.98,
+        "filename: njoftim fillim punimesh",
+    ),
+    DocumentSignature(
+        "site_handover_act",
+        ("akt", "dorezim", "shesh"),
+        0.98,
+        "filename: akt dorezim sheshi",
+    ),
+    DocumentSignature(
+        "start_works_minutes",
+        ("proces", "verbal", "fillim"),
+        0.98,
+        "filename: proces verbal fillimi",
+    ),
+    DocumentSignature(
+        "setting_out_act",
+        ("proces", "verbal", "akt", "piket"),
+        0.98,
+        "filename: proces verbal akt piketimi",
+    ),
+    DocumentSignature(
+        "site_setup_control_act",
+        ("akt", "kontroll", "ngritje", "kantier"),
+        0.99,
+        "filename: akt kontroll ngritje kantieri",
+    ),
+    DocumentSignature(
+        "structure_setting_out_control_act",
+        ("akt", "kontroll", "piket"),
+        0.99,
+        "filename: akt kontroll piketimi",
+    ),
+    DocumentSignature(
+        "level_0_00_control_act",
+        ("akt", "kontroll", "0.00"),
+        0.97,
+        "filename: akt kontroll 0.00",
+    ),
+    DocumentSignature(
+        "foundation_completion_and_level_0_00_control_act",
+        ("akt", "kontroll", "perfundim", "theme"),
+        0.99,
+        "filename: akt kontroll perfundim themele",
+    ),
+    DocumentSignature(
+        "foundation_completion_and_level_0_00_control_act",
+        ("proces", "verbal", "theme", "0.00"),
+        0.94,
+        "filename: proces verbal themele 0.00",
+    ),
+    DocumentSignature(
+        "structural_frame_completion_control_act",
+        ("akt", "kontroll", "perfundim", "karabina"),
+        0.99,
+        "filename: akt kontroll perfundim karabina",
+    ),
+    DocumentSignature(
+        "facade_and_finishing_completion_control_act",
+        ("akt", "kontroll", "perfundim", "fasad", "rifinitur"),
+        0.99,
+        "filename: akt kontroll fasada/rifinitura",
+    ),
+    DocumentSignature(
+        "external_system_completion_control_act",
+        ("akt", "kontroll", "sistem", "jasht"),
+        0.99,
+        "filename: akt kontroll sistem i jashtem",
+    ),
+    DocumentSignature(
+        "external_system_completion_control_act",
+        ("akt", "kontroll", "sistemim", "jasht"),
+        0.99,
+        "filename: akt kontroll sistemim i jashtem",
+    ),
+    DocumentSignature(
+        "start_interruption_extension_completion_minutes",
+        ("proces", "verbal", "perfundim", "punim"),
+        0.96,
+        "filename: proces verbal perfundim punimesh",
+    ),
+    DocumentSignature(
+        "start_interruption_extension_completion_minutes",
+        ("proces", "verbal", "perfundim", "ndertim"),
+        0.94,
+        "filename: proces verbal perfundim ndertimi",
+    ),
+    DocumentSignature(
+        "hidden_works_minutes",
+        ("punim", "mask"),
+        0.98,
+        "filename: punime te maskuara",
+    ),
+    DocumentSignature(
+        "maintenance_project",
+        ("projekt", "mirembajt"),
+        0.98,
+        "filename: projekt mirembajtjeje",
+    ),
+    DocumentSignature(
+        "maintenance_project",
+        ("projekt", "mirmbajt"),
+        0.96,
+        "filename: projekt mirembajtjeje",
+    ),
+    DocumentSignature(
+        "construction_permit_conformity_declaration",
+        ("deklar", "konformitet"),
+        0.98,
+        "filename: deklarate konformiteti",
+    ),
+    DocumentSignature(
+        "technical_declaration",
+        ("deklar", "mbikqyr"),
+        0.96,
+        "filename: deklarate mbikeqyresi",
+    ),
+    DocumentSignature(
+        "technical_declaration",
+        ("deklar", "mbikeqyr"),
+        0.96,
+        "filename: deklarate mbikeqyresi",
+    ),
+    DocumentSignature(
+        "technical_declaration",
+        ("deklar", "sipermarres"),
+        0.96,
+        "filename: deklarate sipermarresi",
+    ),
+    DocumentSignature(
+        "kolaudim_act",
+        ("akt", "kolaudim"),
+        0.98,
+        "filename: akt kolaudimi",
+    ),
+    DocumentSignature(
+        "construction_permit",
+        ("leje", "ndertimi"),
+        0.98,
+        "filename: leje ndertimi",
+    ),
+    DocumentSignature(
+        "development_permit",
+        ("leje", "zhvillimi"),
+        0.98,
+        "filename: leje zhvillimi",
+    ),
+    DocumentSignature(
+        "approved_execution_project",
+        ("projekt", "zbatimi"),
+        0.96,
+        "filename: projekt zbatimi",
+    ),
+    DocumentSignature(
+        "bill_of_quantities",
+        ("preventiv",),
+        0.96,
+        "filename: preventiv",
+    ),
+    DocumentSignature(
+        "geological_engineering_study",
+        ("gjeolog", "inxhinier"),
+        0.96,
+        "filename: studim gjeologo-inxhinierik",
+    ),
+    DocumentSignature(
+        "topographic_documentation",
+        ("topograf",),
+        0.94,
+        "filename: dokumentacion topografik",
+    ),
+    DocumentSignature(
+        "seismic_study",
+        ("sizmik",),
+        0.94,
+        "filename: studim sizmik",
+    ),
+    DocumentSignature(
+        "construction_organization_plan",
+        ("planorganizim",),
+        0.96,
+        "filename: planorganizim",
+    ),
+    DocumentSignature(
+        "professional_license",
+        ("licenc",),
+        0.94,
+        "filename: licence",
+    ),
+    DocumentSignature(
+        "forty_five_day_report",
+        ("raport", "45"),
+        0.96,
+        "filename: raport 45 ditor",
+    ),
+)
+
+AMBIGUOUS_BODY_DOCUMENT_TYPES = {
+    "approved_execution_project",
+    "bill_of_quantities",
+    "construction_organization_plan",
+    "construction_permit",
+    "construction_permit_conformity_declaration",
+    "contract_and_related_acts",
+    "development_permit",
+    "geological_engineering_study",
+    "professional_license",
+    "seismic_study",
+    "supervisor_contract",
+    "technical_declaration",
+    "technical_opposition",
+    "topographic_documentation",
+}
+
+BODY_SIGNATURES: tuple[DocumentSignature, ...] = tuple(
+    signature
+    for signature in DOCUMENT_SIGNATURES
+    if signature.document_type not in AMBIGUOUS_BODY_DOCUMENT_TYPES
+)
+
 
 def classify_document(filename: str, text: str | None) -> ClassificationResult:
     normalized_filename = _normalize_text(filename)
@@ -462,10 +740,27 @@ def classify_document(filename: str, text: str | None) -> ClassificationResult:
             evidence="official law or regulation marker",
         )
 
-    haystack = f"{normalized_filename} {normalized_text[:CLASSIFICATION_TEXT_LIMIT]}"
+    filename_match = _best_signature_result(FILENAME_SIGNATURES, normalized_filename)
+    if filename_match is not None:
+        return filename_match
+
+    return _best_signature_result(
+        BODY_SIGNATURES,
+        normalized_text[:CLASSIFICATION_TEXT_LIMIT],
+    ) or ClassificationResult(
+        document_type=UNKNOWN_DOCUMENT_TYPE,
+        confidence=0.0,
+        evidence=None,
+    )
+
+
+def _best_signature_result(
+    signatures: tuple[DocumentSignature, ...],
+    haystack: str,
+) -> ClassificationResult | None:
     best_match: ClassificationResult | None = None
 
-    for signature in DOCUMENT_SIGNATURES:
+    for signature in signatures:
         if _signature_matches(signature, haystack):
             result = ClassificationResult(
                 document_type=signature.document_type,
@@ -475,12 +770,6 @@ def classify_document(filename: str, text: str | None) -> ClassificationResult:
             if best_match is None or result.confidence > best_match.confidence:
                 best_match = result
 
-    if best_match is None:
-        return ClassificationResult(
-            document_type=UNKNOWN_DOCUMENT_TYPE,
-            confidence=0.0,
-            evidence=None,
-        )
     return best_match
 
 

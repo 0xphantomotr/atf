@@ -36,11 +36,15 @@ def test_classifier_handles_common_vkm_610_documents() -> None:
 
 def test_classifier_handles_real_dossier_filenames() -> None:
     examples = {
+        "0. Kontrate Kolaudatorin me z.Naqe Bala.docx": "contract_and_related_acts",
         "0. Kontrate Mbiqkyrsin me z. Oltion Kaba.docx": "supervisor_contract",
         "0.0 Ditari i Punimeve OK.docx": "daily_site_log",
         "1.1 Njoftim Fillim Punimesh OK.docx": "start_works_notification",
         "1.2 Proces Verbal Akt Dorezim Sheshi OK.docx": "site_handover_act",
+        "1.3 Proces Verbal Fillim OK.docx": "start_works_minutes",
+        "1.4  Proces Verbal Akt Piketim OK.docx": "setting_out_act",
         "1.5 [1] Akt kontroll i ngritjes se kantierit.docx": "site_setup_control_act",
+        "1.5 [2] Akt kontroll Piketim.docx": "structure_setting_out_control_act",
         "1.9.1.1 Proces verb.punim.mask.Form-1(plintat).docx": "hidden_works_minutes",
         "2.0 [3] Akt kontrolli Përfundimi i themeleve.docx": (
             "foundation_completion_and_level_0_00_control_act"
@@ -58,10 +62,45 @@ def test_classifier_handles_real_dossier_filenames() -> None:
         "7. Deklarat Konformiteti Sipermarresi.docx": (
             "construction_permit_conformity_declaration"
         ),
+        "deklart mbikqyresi alisha kerpi.docx": "technical_declaration",
+        "X.Akt Kolaudimi.docx": "kolaudim_act",
     }
 
     for filename, expected_type in examples.items():
         assert classify_document_type(filename, "")[0] == expected_type
+
+
+def test_explicit_real_dossier_filename_overrides_template_body() -> None:
+    template_text = (
+        "Ne baze te kontrates me mbikqyresin dhe lejes se ndertimit, "
+        "mbikqyresi deklaron detyrimet e tij."
+    )
+    examples = {
+        "1.1 Njoftim Fillim Punimesh OK.docx": "start_works_notification",
+        "1.2 Proces Verbal Akt Dorezim Sheshi OK.docx": "site_handover_act",
+        "1.5 [1] Akt kontroll i ngritjes se kantierit.docx": "site_setup_control_act",
+        "1.5 [2] Akt kontroll Piketim.docx": "structure_setting_out_control_act",
+        "X.Akt Kolaudimi.docx": "kolaudim_act",
+    }
+
+    for filename, expected_type in examples.items():
+        assert classify_document_type(filename, template_text)[0] == expected_type
+
+
+def test_phase_completion_notice_is_not_supervisor_contract() -> None:
+    template_text = (
+        "Kontrata me mbikqyresin dhe studimi gjeologo-inxhinierik permenden "
+        "ne tekstin standard te dokumentit."
+    )
+
+    examples = [
+        "1.6 Proces Verbal mbi perfundimin e Germimit te Themeleve .docx",
+        "1.7 Proces Verbal mbi Kontrollin e tabanit te themeleve.docx",
+        "2.2 Njoftim mbi perfundimin e Ndertimit te Themeleve deri ne 0.00.docx",
+    ]
+
+    for filename in examples:
+        assert classify_document_type(filename, template_text)[0] == "unknown"
 
 
 def test_supervisor_contract_is_not_classified_as_report_when_it_mentions_45_days() -> None:

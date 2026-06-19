@@ -43,6 +43,29 @@ class BulkFileUploadRead(BaseModel):
     skipped: list[BulkFileSkipRead]
 
 
+class ProjectFileClassificationRead(BaseModel):
+    file_id: UUID
+    version_id: UUID
+    filename: str
+    parse_status: str
+    document_type: str | None
+    classification_confidence: float | None
+
+
+class ProjectClassificationSummaryRead(BaseModel):
+    total_files: int
+    parsed_files: int
+    pending_files: int
+    processing_files: int
+    unsupported_files: int
+    failed_files: int
+    unknown_files: int
+    classified_files: int
+    reclassified_files: int = 0
+    document_type_counts: dict[str, int]
+    files: list[ProjectFileClassificationRead]
+
+
 class ParsedDocumentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

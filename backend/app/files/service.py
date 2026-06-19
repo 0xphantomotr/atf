@@ -4,6 +4,7 @@ import re
 import unicodedata
 import uuid
 import zipfile
+from collections import Counter
 from pathlib import Path, PurePosixPath
 from tempfile import SpooledTemporaryFile
 from typing import BinaryIO
@@ -14,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.files.classifier import classify_document
+from app.files.classifier import UNKNOWN_DOCUMENT_TYPE, classify_document
 from app.files.models import FileVersion, ParsedDocument, ProjectFile
 from app.files.parser import is_supported_filename
 from app.files.storage import ensure_bucket_exists, get_minio_client
@@ -622,6 +623,108 @@ async def classify_parsed_document_for_current_version(
     )
 
 
+async def classify_project_current_documents(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> dict:
+    await get_project(session, project_id=project_id, user_id=user_id)
+    rows = await _get_current_project_file_rows(session, project_id=project_id)
+    reclassified_files = 0
+
+    for _, file_version, parsed_document in rows:
+        if parsed_document is None:
+            continue
+        before_type = parsed_document.document_type
+        before_metadata = dict(parsed_document.document_metadata or {})
+        _apply_document_classification(parsed_document, file_version)
+        if (
+            parsed_document.document_type != before_type
+            or parsed_document.document_metadata != before_metadata
+        ):
+            reclassified_files += 1
+
+    await session.commit()
+    return _build_classification_summary(rows, reclassified_files=reclassified_files)
+
+
+async def get_project_classification_summary(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> dict:
+    await get_project(session, project_id=project_id, user_id=user_id)
+    rows = await _get_current_project_file_rows(session, project_id=project_id)
+    return _build_classification_summary(rows, reclassified_files=0)
+
+
+async def _get_current_project_file_rows(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+) -> list[tuple[ProjectFile, FileVersion, ParsedDocument | None]]:
+    result = await session.execute(
+        select(ProjectFile, FileVersion, ParsedDocument)
+        .join(
+            FileVersion,
+            FileVersion.file_id == ProjectFile.id,
+        )
+        .outerjoin(ParsedDocument, ParsedDocument.file_version_id == FileVersion.id)
+        .where(
+            ProjectFile.project_id == project_id,
+            ProjectFile.deleted_at.is_(None),
+            FileVersion.version_number == ProjectFile.current_version,
+        )
+        .order_by(ProjectFile.created_at.desc())
+    )
+    return list(result)
+
+
+def _build_classification_summary(
+    rows: list[tuple[ProjectFile, FileVersion, ParsedDocument | None]],
+    *,
+    reclassified_files: int,
+) -> dict:
+    status_counts = Counter(file_version.parse_status for _, file_version, _ in rows)
+    document_type_counts: Counter[str] = Counter()
+    files: list[dict] = []
+
+    for project_file, file_version, parsed_document in rows:
+        document_type = parsed_document.document_type if parsed_document else None
+        confidence = _classification_confidence(parsed_document)
+        if file_version.parse_status == "parsed" and document_type:
+            document_type_counts[document_type] += 1
+
+        files.append(
+            {
+                "file_id": project_file.id,
+                "version_id": file_version.id,
+                "filename": file_version.original_filename,
+                "parse_status": file_version.parse_status,
+                "document_type": document_type,
+                "classification_confidence": confidence,
+            }
+        )
+
+    unknown_files = document_type_counts.get(UNKNOWN_DOCUMENT_TYPE, 0)
+    classified_files = sum(document_type_counts.values()) - unknown_files
+    return {
+        "total_files": len(rows),
+        "parsed_files": status_counts.get("parsed", 0),
+        "pending_files": status_counts.get("pending", 0),
+        "processing_files": status_counts.get("processing", 0),
+        "unsupported_files": status_counts.get("unsupported", 0),
+        "failed_files": status_counts.get("failed", 0),
+        "unknown_files": unknown_files,
+        "classified_files": classified_files,
+        "reclassified_files": reclassified_files,
+        "document_type_counts": dict(sorted(document_type_counts.items())),
+        "files": files,
+    }
+
+
 async def _get_current_file_version(
     session: AsyncSession,
     *,
@@ -680,3 +783,17 @@ def _apply_document_classification(
 
     parsed_document.document_type = classification.document_type
     parsed_document.document_metadata = metadata
+
+
+def _classification_confidence(parsed_document: ParsedDocument | None) -> float | None:
+    if parsed_document is None:
+        return None
+    metadata = parsed_document.document_metadata or {}
+    classification = metadata.get("classification") or {}
+    confidence = classification.get("confidence")
+    if confidence is None:
+        return None
+    try:
+        return float(confidence)
+    except (TypeError, ValueError):
+        return None

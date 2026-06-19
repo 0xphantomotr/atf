@@ -10,6 +10,7 @@ from app.files.schemas import (
     BulkFileUploadRead,
     FileVersionRead,
     ParsedDocumentRead,
+    ProjectClassificationSummaryRead,
     ProjectFileRead,
     ProjectFileUploadRead,
 )
@@ -84,6 +85,34 @@ async def import_files_zip(
         user_id=current_user.id,
     )
     return _serialize_upload_result(uploaded, skipped)
+
+
+@router.post("/classify", response_model=ProjectClassificationSummaryRead)
+async def classify_project_files(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectClassificationSummaryRead:
+    summary = await service.classify_project_current_documents(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
+    return ProjectClassificationSummaryRead.model_validate(summary)
+
+
+@router.get("/classification-summary", response_model=ProjectClassificationSummaryRead)
+async def get_classification_summary(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectClassificationSummaryRead:
+    summary = await service.get_project_classification_summary(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+    )
+    return ProjectClassificationSummaryRead.model_validate(summary)
 
 
 @router.get("", response_model=list[ProjectFileRead])

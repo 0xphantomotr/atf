@@ -67,6 +67,34 @@ def test_found_document_types_only_counts_parsed_known_documents() -> None:
     assert _found_document_types(snapshots) == {"site_book"}
 
 
+def test_found_document_types_expands_compatible_aliases() -> None:
+    snapshots = [
+        CurrentFileSnapshot(
+            file_id=uuid.uuid4(),
+            version_id=uuid.uuid4(),
+            original_filename="akt-kontroll-themele.docx",
+            parse_status="parsed",
+            document_type="foundation_completion_and_level_0_00_control_act",
+            classification_confidence=0.99,
+        ),
+        CurrentFileSnapshot(
+            file_id=uuid.uuid4(),
+            version_id=uuid.uuid4(),
+            original_filename="njoftim-fillim.docx",
+            parse_status="parsed",
+            document_type="start_works_notification",
+            classification_confidence=0.98,
+        ),
+    ]
+
+    assert _found_document_types(snapshots) == {
+        "foundation_completion_and_level_0_00_control_act",
+        "level_0_00_control_act",
+        "start_works_notification",
+        "start_works_notification_letter",
+    }
+
+
 def test_missing_document_finding_includes_rule_and_files_checked() -> None:
     job = SimpleNamespace(id=uuid.uuid4())
     project = SimpleNamespace(
