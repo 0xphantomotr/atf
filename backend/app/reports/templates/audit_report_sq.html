@@ -173,6 +173,18 @@
           <th>Faza</th>
           <td>{{ report.agent_metadata.phase }}</td>
         </tr>
+        {% if report.agent_metadata.ai_review %}
+        <tr>
+          <th>Auditori AI</th>
+          <td>{{ report.agent_metadata.ai_review.status }}</td>
+        </tr>
+        {% if report.agent_metadata.ai_review.executive_summary %}
+        <tr>
+          <th>Përmbledhja AI</th>
+          <td>{{ report.agent_metadata.ai_review.executive_summary }}</td>
+        </tr>
+        {% endif %}
+        {% endif %}
         <tr>
           <th>Nyjet</th>
           <td>{{ report.agent_metadata.trace | join(" -> ") }}</td>

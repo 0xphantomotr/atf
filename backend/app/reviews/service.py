@@ -724,11 +724,30 @@ def _agent_appendices(agent_state: AuditGraphState | None) -> list[str]:
     trace = agent_state.get("agent_trace") or []
     appendices = [
         (
-            "Workflow LangGraph Phase 1 ekzekutoi kontrollin deterministik në nyjet: "
+            "Workflow LangGraph Phase 2 ekzekutoi kontrollin në nyjet: "
             + " -> ".join(trace)
             + "."
         )
     ]
+    ai_review = agent_state.get("ai_review", {})
+    if isinstance(ai_review, dict):
+        status = ai_review.get("status")
+        if status == "reviewed":
+            appendices.append(
+                "Nyja e auditorit të lartë AI rishikoi gjetjet deterministike dhe "
+                "ruajti rezultatin si metadata të raportit."
+            )
+        elif status == "skipped":
+            appendices.append(
+                "Nyja e auditorit të lartë AI u anashkalua: "
+                f"{ai_review.get('reason', 'arsye e paspecifikuar')}."
+            )
+        elif status == "failed":
+            appendices.append(
+                "Nyja e auditorit të lartë AI nuk u përfundua dhe raporti ruajti "
+                "kontrollin deterministik si burim kryesor."
+            )
+
     if agent_state.get("needs_human_review"):
         appendices.append(
             "Workflow-i sinjalizoi nevojë për verifikim njerëzor për shkak të "
@@ -743,13 +762,16 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
         return {}
 
     report = agent_state.get("report", {})
+    ai_review = agent_state.get("ai_review", {})
+    report_phase = report.get("phase") if isinstance(report, dict) else None
     return {
-        "phase": "langgraph_phase_1",
+        "phase": report_phase if isinstance(report_phase, str) else "langgraph_phase_2",
         "trace": list(agent_state.get("agent_trace", [])),
         "needs_human_review": bool(agent_state.get("needs_human_review", False)),
         "document_inventory": dict(agent_state.get("document_inventory", {})),
         "law_context": dict(agent_state.get("law_context", {})),
         "completeness_summary": dict(agent_state.get("completeness_summary", {})),
+        "ai_review": dict(ai_review) if isinstance(ai_review, dict) else {},
         "report": dict(report) if isinstance(report, dict) else {},
     }
 
@@ -814,6 +836,11 @@ def _store_report_outputs(
                     "law_scope": report.law_scope,
                     "agent_phase": report.agent_metadata.get("phase"),
                     "agent_trace": report.agent_metadata.get("trace", []),
+                    "ai_review_status": (
+                        report.agent_metadata.get("ai_review", {}).get("status")
+                        if isinstance(report.agent_metadata.get("ai_review"), dict)
+                        else None
+                    ),
                     "needs_human_review": report.agent_metadata.get(
                         "needs_human_review",
                         False,

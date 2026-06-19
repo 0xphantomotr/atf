@@ -7,6 +7,8 @@ from app.agents.nodes.evidence_verifier import verify_evidence
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.report_writer import write_report
+from app.agents.nodes.senior_reviewer import senior_review
+from app.core.config import settings
 from app.reviews.service import (
     CurrentFileSnapshot,
     RuleContext,
@@ -15,7 +17,9 @@ from app.reviews.service import (
 )
 
 
-def test_phase_one_nodes_build_trace_and_report() -> None:
+def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "ai_senior_review_enabled", True)
     state = {
         "project": {
             "id": str(uuid.uuid4()),
@@ -55,6 +59,7 @@ def test_phase_one_nodes_build_trace_and_report() -> None:
         retrieve_laws,
         audit_completeness,
         verify_evidence,
+        senior_review,
         write_report,
     ):
         state = node(state)
@@ -65,6 +70,7 @@ def test_phase_one_nodes_build_trace_and_report() -> None:
         "law_retriever",
         "deterministic_completeness",
         "evidence_verifier",
+        "senior_reviewer",
         "report_writer",
     ]
     assert state["document_inventory"]["total_documents"] == 2
@@ -73,7 +79,10 @@ def test_phase_one_nodes_build_trace_and_report() -> None:
     assert state["law_context"]["rule_count"] == 1
     assert state["findings"][0]["evidence_verified"]
     assert state["needs_human_review"]
-    assert state["report"]["phase"] == "langgraph_phase_1"
+    assert state["ai_review"]["status"] == "skipped"
+    assert state["ai_review"]["reason"] == "missing_openai_api_key"
+    assert state["report"]["phase"] == "langgraph_phase_2"
+    assert state["report"]["ai_review_status"] == "skipped"
     assert state["report"]["finding_count"] == 1
 
 
@@ -158,18 +167,30 @@ def test_build_agent_state_serializes_review_inputs() -> None:
     ]
 
 
+def test_senior_reviewer_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "ai_senior_review_enabled", False)
+
+    state = senior_review({"agent_trace": []})
+
+    assert state["agent_trace"] == ["senior_reviewer"]
+    assert state["ai_review"]["status"] == "skipped"
+    assert state["ai_review"]["reason"] == "ai_senior_review_disabled"
+
 def test_agent_metadata_is_report_safe() -> None:
     metadata = _agent_metadata(
         {
-            "agent_trace": ["project_context", "report_writer"],
+            "agent_trace": ["project_context", "senior_reviewer", "report_writer"],
             "needs_human_review": True,
             "document_inventory": {"total_documents": 2},
             "law_context": {"rule_count": 1},
             "completeness_summary": {"finding_count": 1},
-            "report": {"phase": "langgraph_phase_1"},
+            "ai_review": {"status": "skipped", "reason": "missing_openai_api_key"},
+            "report": {"phase": "langgraph_phase_2"},
         }
     )
 
-    assert metadata["phase"] == "langgraph_phase_1"
-    assert metadata["trace"] == ["project_context", "report_writer"]
+    assert metadata["phase"] == "langgraph_phase_2"
+    assert metadata["trace"] == ["project_context", "senior_reviewer", "report_writer"]
+    assert metadata["ai_review"]["status"] == "skipped"
     assert metadata["needs_human_review"] is True

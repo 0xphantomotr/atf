@@ -7,6 +7,7 @@ from app.agents.nodes.evidence_verifier import verify_evidence
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.report_writer import write_report
+from app.agents.nodes.senior_reviewer import senior_review
 from app.agents.state import AuditGraphState
 
 
@@ -26,6 +27,7 @@ def build_audit_graph() -> Any:
     workflow.add_node("law_retriever", retrieve_laws)
     workflow.add_node("deterministic_completeness", audit_completeness)
     workflow.add_node("evidence_verifier", verify_evidence)
+    workflow.add_node("senior_reviewer", senior_review)
     workflow.add_node("report_writer", write_report)
 
     workflow.set_entry_point("project_context")
@@ -33,7 +35,8 @@ def build_audit_graph() -> Any:
     workflow.add_edge("document_inventory", "law_retriever")
     workflow.add_edge("law_retriever", "deterministic_completeness")
     workflow.add_edge("deterministic_completeness", "evidence_verifier")
-    workflow.add_edge("evidence_verifier", "report_writer")
+    workflow.add_edge("evidence_verifier", "senior_reviewer")
+    workflow.add_edge("senior_reviewer", "report_writer")
     workflow.add_edge("report_writer", END)
 
     return workflow.compile()

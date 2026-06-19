@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = Field(default="change-me", min_length=1)
 
     openai_api_key: str = ""
+    openai_api_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
+    openai_timeout_seconds: int = 45
+    openai_max_output_tokens: int = 1800
+    ai_senior_review_enabled: bool = True
 
 
 @lru_cache
@@ -34,4 +39,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-
