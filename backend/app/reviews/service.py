@@ -10,6 +10,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.graph import run_audit_graph
+from app.agents.state import AuditGraphState
 from app.core.config import settings
 from app.files.classifier import UNKNOWN_DOCUMENT_TYPE, classify_document
 from app.files.models import FileVersion, ParsedDocument, ProjectFile
@@ -222,12 +224,21 @@ async def run_queued_review_job(
             session.add(finding)
         await session.flush()
 
+        agent_state = _run_phase_one_audit_graph(
+            project=project,
+            job=job,
+            current_files=current_files,
+            rule_contexts=rule_contexts,
+            findings=findings,
+        )
+
         job.progress = 70
         report = _build_audit_report(
             project=project,
             job=job,
             current_files=current_files,
             findings=findings,
+            agent_state=agent_state,
         )
         for output in _store_report_outputs(job=job, report=report):
             session.add(output)
@@ -301,11 +312,23 @@ async def get_review_job_outputs(
     )
     current_files = await _load_current_file_snapshots(session, project_id=project.id)
     findings = await _load_review_findings_for_job(session, job_id=job.id)
+    rule_contexts = await _load_validated_rule_contexts(
+        session,
+        law_scope=tuple(_law_scope_codes(job)),
+    )
+    agent_state = _run_phase_one_audit_graph(
+        project=project,
+        job=job,
+        current_files=current_files,
+        rule_contexts=rule_contexts,
+        findings=findings,
+    )
     report = _build_audit_report(
         project=project,
         job=job,
         current_files=current_files,
         findings=findings,
+        agent_state=agent_state,
     )
     outputs = _store_report_outputs(job=job, report=report)
     for output in outputs:
@@ -567,12 +590,90 @@ def _build_missing_document_findings(
     return findings
 
 
+def _run_phase_one_audit_graph(
+    *,
+    project: Project,
+    job: ReviewJob,
+    current_files: list[CurrentFileSnapshot],
+    rule_contexts: list[RuleContext],
+    findings: list[ReviewFinding],
+) -> AuditGraphState:
+    return run_audit_graph(
+        _build_agent_state(
+            project=project,
+            job=job,
+            current_files=current_files,
+            rule_contexts=rule_contexts,
+            findings=findings,
+        )
+    )
+
+
+def _build_agent_state(
+    *,
+    project: Project,
+    job: ReviewJob,
+    current_files: list[CurrentFileSnapshot],
+    rule_contexts: list[RuleContext],
+    findings: list[ReviewFinding],
+) -> AuditGraphState:
+    return {
+        "project": {
+            "id": str(project.id),
+            "name": project.name,
+            "project_type": project.project_type,
+            "stage": project.stage,
+            "location": project.location,
+        },
+        "job": {
+            "id": str(job.id),
+            "job_type": job.job_type,
+            "language": job.language,
+            "output_format": job.output_format,
+            "law_scope": _law_scope_codes(job),
+        },
+        "user_prompt": job.user_prompt or "",
+        "documents": [_current_file_as_dict(current_file) for current_file in current_files],
+        "rules": [_rule_context_as_dict(context) for context in rule_contexts],
+        "findings": [_structured_finding(finding) for finding in findings],
+        "needs_human_review": False,
+        "agent_trace": [],
+    }
+
+
+def _current_file_as_dict(current_file: CurrentFileSnapshot) -> dict[str, Any]:
+    return {
+        "file_id": str(current_file.file_id),
+        "version_id": str(current_file.version_id),
+        "original_filename": current_file.original_filename,
+        "parse_status": current_file.parse_status,
+        "document_type": current_file.document_type,
+        "classification_confidence": current_file.classification_confidence,
+    }
+
+
+def _rule_context_as_dict(context: RuleContext) -> dict[str, Any]:
+    return {
+        "rule_code": context.rule.rule_code,
+        "title": context.rule.title,
+        "severity_if_missing": context.rule.severity_if_missing,
+        "law_reference": _law_reference(context),
+        "required_document_types": _required_document_types(context.rule),
+        "applies_to": context.rule.applies_to or {},
+        "law_document_code": context.law_document.code,
+        "law_article_number": (
+            context.law_article.article_number if context.law_article else None
+        ),
+    }
+
+
 def _build_audit_report(
     *,
     project: Project,
     job: ReviewJob,
     current_files: list[CurrentFileSnapshot],
     findings: list[ReviewFinding],
+    agent_state: AuditGraphState | None = None,
 ) -> AuditReport:
     structured_findings = [_structured_finding(finding) for finding in findings]
     required_actions = sorted(
@@ -584,6 +685,17 @@ def _build_audit_report(
     )
     document_summary = _document_summary(current_files)
     law_scope = _law_scope_codes(job)
+    appendices = [
+        (
+            "Raporti kontrollon praninë e dokumenteve të klasifikuara në sistem "
+            "dhe nuk zëvendëson verifikimin profesional ose ligjor njerëzor."
+        ),
+        (
+            "Dokumentet e paklasifikuara ose formatet e pambështetura duhet të "
+            "verifikohen manualisht përpara vendimmarrjes."
+        ),
+    ]
+    appendices.extend(_agent_appendices(agent_state))
 
     return AuditReport(
         generated_at=job.completed_at or datetime.now(timezone.utc),
@@ -600,17 +712,46 @@ def _build_audit_report(
         summary=_report_summary(document_summary, structured_findings),
         findings=structured_findings,
         required_actions=required_actions,
-        appendices=[
-            (
-                "Raporti kontrollon praninë e dokumenteve të klasifikuara në sistem "
-                "dhe nuk zëvendëson verifikimin profesional ose ligjor njerëzor."
-            ),
-            (
-                "Dokumentet e paklasifikuara ose formatet e pambështetura duhet të "
-                "verifikohen manualisht përpara vendimmarrjes."
-            ),
-        ],
+        appendices=appendices,
+        agent_metadata=_agent_metadata(agent_state),
     )
+
+
+def _agent_appendices(agent_state: AuditGraphState | None) -> list[str]:
+    if not agent_state:
+        return []
+
+    trace = agent_state.get("agent_trace") or []
+    appendices = [
+        (
+            "Workflow LangGraph Phase 1 ekzekutoi kontrollin deterministik në nyjet: "
+            + " -> ".join(trace)
+            + "."
+        )
+    ]
+    if agent_state.get("needs_human_review"):
+        appendices.append(
+            "Workflow-i sinjalizoi nevojë për verifikim njerëzor për shkak të "
+            "dokumenteve të paklasifikuara, formateve të pambështetura ose evidencës "
+            "që kërkon kontroll manual."
+        )
+    return appendices
+
+
+def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
+    if not agent_state:
+        return {}
+
+    report = agent_state.get("report", {})
+    return {
+        "phase": "langgraph_phase_1",
+        "trace": list(agent_state.get("agent_trace", [])),
+        "needs_human_review": bool(agent_state.get("needs_human_review", False)),
+        "document_inventory": dict(agent_state.get("document_inventory", {})),
+        "law_context": dict(agent_state.get("law_context", {})),
+        "completeness_summary": dict(agent_state.get("completeness_summary", {})),
+        "report": dict(report) if isinstance(report, dict) else {},
+    }
 
 
 def _store_report_outputs(
@@ -671,6 +812,12 @@ def _store_report_outputs(
                     "finding_count": len(report.findings),
                     "recommendation": report.recommendation,
                     "law_scope": report.law_scope,
+                    "agent_phase": report.agent_metadata.get("phase"),
+                    "agent_trace": report.agent_metadata.get("trace", []),
+                    "needs_human_review": report.agent_metadata.get(
+                        "needs_human_review",
+                        False,
+                    ),
                 },
             )
         )

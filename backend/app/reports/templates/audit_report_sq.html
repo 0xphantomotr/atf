@@ -165,6 +165,26 @@
     <p>Nuk ka veprime të kërkuara nga rregullat e aplikuara.</p>
     {% endif %}
 
+    {% if report.agent_metadata %}
+    <h2>Verifikimi i workflow-it</h2>
+    <table>
+      <tbody>
+        <tr>
+          <th>Faza</th>
+          <td>{{ report.agent_metadata.phase }}</td>
+        </tr>
+        <tr>
+          <th>Nyjet</th>
+          <td>{{ report.agent_metadata.trace | join(" -> ") }}</td>
+        </tr>
+        <tr>
+          <th>Verifikim njerëzor</th>
+          <td>{{ "Po" if report.agent_metadata.needs_human_review else "Jo" }}</td>
+        </tr>
+      </tbody>
+    </table>
+    {% endif %}
+
     <h2>Shtojca - lista e dokumenteve</h2>
     <table>
       <thead>
