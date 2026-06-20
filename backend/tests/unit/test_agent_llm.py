@@ -3,6 +3,9 @@ import json
 from app.agents.llm import (
     _post_json,
     _response_format,
+    kolaudim_draft_input_token_budget,
+    kolaudim_draft_max_output_tokens,
+    model_request_token_limit,
     request_kolaudim_draft,
     request_senior_review,
 )
@@ -142,6 +145,15 @@ def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None
     user_payload = json.loads(captured["body"]["messages"][1]["content"])
     assert captured["path"] == "/chat/completions"
     assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert captured["body"]["max_tokens"] <= 1800
     assert "required_output_shape" in user_payload
     assert user_payload["draft_input"]["project"]["name"] == "Test"
     assert draft["status"] == "drafted"
+
+
+def test_kolaudim_draft_budget_is_dynamic_for_groq() -> None:
+    ai_settings = {"provider": "groq", "model": "openai/gpt-oss-20b"}
+
+    assert model_request_token_limit(ai_settings) == 8000
+    assert kolaudim_draft_max_output_tokens(ai_settings) <= 1800
+    assert kolaudim_draft_input_token_budget(ai_settings) < 8000

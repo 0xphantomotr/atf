@@ -7,7 +7,11 @@ from app.agents.nodes.document_classifier import classify_documents
 from app.agents.nodes.evidence_verifier import verify_evidence
 from app.agents.nodes.fact_extractor import extract_project_facts
 from app.agents.nodes.kolaudim_planner import plan_kolaudim_act
-from app.agents.nodes.kolaudim_writer import write_kolaudim_draft
+from app.agents.llm import kolaudim_draft_input_token_budget
+from app.agents.nodes.kolaudim_writer import (
+    _build_kolaudim_writer_input,
+    write_kolaudim_draft,
+)
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.report_writer import write_report
@@ -226,3 +230,55 @@ def test_agent_metadata_is_report_safe() -> None:
     assert metadata["trace"] == ["project_context", "senior_reviewer", "report_writer"]
     assert metadata["ai_review"]["status"] == "skipped"
     assert metadata["needs_human_review"] is True
+
+
+def test_kolaudim_writer_input_respects_model_budget() -> None:
+    ai_settings = {
+        "provider": "groq",
+        "model": "openai/gpt-oss-20b",
+        "api_key": "gsk_test",
+    }
+    long_text = "\n".join(
+        [
+            "Objekti: Godine banimi. Investitor: Test shpk. Leje ndertimi Nr. 1.",
+            "Ky tekst i gjate nuk duhet te dergohet i plote. " * 120,
+        ]
+    )
+    documents = [
+        {
+            "original_filename": f"doc-{index}.docx",
+            "parse_status": "parsed",
+            "document_type": "kolaudim_act" if index == 0 else "hidden_works_minutes",
+            "classification_confidence": 0.9,
+            "text_excerpt": long_text,
+        }
+        for index in range(50)
+    ]
+    state = {
+        "project": {"name": "Godine banimi"},
+        "job": {"job_type": "kolaudim_act"},
+        "documents": documents,
+        "document_inventory": {"total_documents": len(documents)},
+        "extracted_facts": {
+            "categories": {
+                "object_name": [
+                    {"value": "Godine banimi", "source_document": "doc-0.docx"}
+                ]
+            }
+        },
+        "vkm_obligation_map": {"items": []},
+        "findings": [],
+        "consistency_review": {"issues": []},
+        "kolaudim_analysis": {"readiness": "draft_ready_for_human_review"},
+    }
+
+    writer_input = _build_kolaudim_writer_input(state, ai_settings=ai_settings)
+
+    assert writer_input["budget"]["estimated_input_tokens"] <= (
+        kolaudim_draft_input_token_budget(ai_settings)
+    )
+    assert writer_input["budget"]["selected_document_count"] <= len(documents)
+    assert all(
+        len(document["evidence_excerpt"]) <= 900
+        for document in writer_input["document_evidence"]
+    )

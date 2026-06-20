@@ -1,3 +1,4 @@
+import json
 import uuid
 from types import SimpleNamespace
 
@@ -8,7 +9,10 @@ from app.reviews.service import (
     _build_audit_report,
     _build_missing_document_findings,
     _found_document_types,
+    _json_output_bytes,
+    _output_metadata,
     _output_types_for_format,
+    _report_output_basename,
     _required_document_types,
     _rule_applies_to_project,
 )
@@ -221,10 +225,12 @@ def test_audit_report_compacts_historical_files_checked_evidence() -> None:
         "draft_with_reservations"
     )
     html = render_audit_report_html(report)
-    assert "Analiza profesionale për kolaudim" in html
     assert "Draft Akt Kolaudimi Teknik" in html
     assert "Drafti mbështetet në VKM 610/2022." in html
     assert "Për nënshkrim nga palët përgjegjëse." in html
+    assert "Dokumentet e kontrolluara" not in html
+    assert "Tabela e gjetjeve" not in html
+    assert "Shtojca - lista e dokumenteve" not in html
     assert report.project.name == "Godine banimi"
     assert report.document_summary.total_files == 2
     assert report.document_summary.classified_files == 1
@@ -236,3 +242,83 @@ def test_audit_report_compacts_historical_files_checked_evidence() -> None:
 def test_output_types_include_json_before_pdf() -> None:
     assert _output_types_for_format("json") == ("json",)
     assert _output_types_for_format("pdf") == ("json", "pdf")
+
+
+def test_kolaudim_output_basename_is_clean() -> None:
+    assert _report_output_basename(SimpleNamespace(job_type="kolaudim_act")) == (
+        "akt-kolaudimi"
+    )
+    assert _report_output_basename(SimpleNamespace(job_type="documentation_checklist")) == (
+        "audit-report"
+    )
+
+
+def test_kolaudim_json_output_is_clean_act_payload() -> None:
+    report = _sample_kolaudim_report()
+    job = SimpleNamespace(job_type="kolaudim_act")
+
+    payload = json.loads(_json_output_bytes(job, report).decode("utf-8"))
+    metadata = _output_metadata(
+        job,
+        report,
+        filename="akt-kolaudimi.json",
+        content_type="application/json; charset=utf-8",
+        size_bytes=100,
+    )
+
+    assert payload["title"] == "Draft Akt Kolaudimi Teknik"
+    assert payload["sections"][0]["title"] == "Baza ligjore"
+    assert "document_summary" not in payload
+    assert "findings" not in payload
+    assert "required_actions" not in payload
+    assert "agent_metadata" not in payload
+    assert "finding_count" not in metadata
+    assert "recommendation" not in metadata
+    assert "agent_trace" not in metadata
+
+
+def _sample_kolaudim_report():
+    project = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Godine banimi",
+        project_type="residential",
+        stage="during_construction",
+        location="Tirane",
+    )
+    job = SimpleNamespace(
+        id=uuid.uuid4(),
+        job_type="kolaudim_act",
+        completed_at=None,
+        law_scope={"codes": ["VKM_610_2022"]},
+    )
+    return _build_audit_report(
+        project=project,
+        job=job,
+        current_files=[],
+        findings=[],
+        agent_state={
+            "job": {"job_type": "kolaudim_act"},
+            "kolaudim_analysis": {
+                "readiness": "draft_ready_for_human_review",
+                "professional_conclusion": "Draft i aktit të kolaudimit.",
+            },
+            "kolaudim_draft": {
+                "status": "drafted",
+                "title": "Draft Akt Kolaudimi Teknik",
+                "executive_summary": "Draft profesional.",
+                "sections": [
+                    {
+                        "code": "legal_basis",
+                        "title": "Baza ligjore",
+                        "body": "Mbështetet në VKM 610/2022.",
+                        "evidence_notes": ["VKM 610/2022"],
+                    }
+                ],
+                "reservations": [],
+                "human_completion_items": ["Plotësoni datën e aktit final."],
+                "signature_note": "Për nënshkrim.",
+                "confidence": 0.8,
+            },
+            "report": {"phase": "professional_kolaudim_phase_1"},
+        },
+    )

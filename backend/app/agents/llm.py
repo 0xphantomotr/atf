@@ -10,6 +10,28 @@ class LLMReviewError(RuntimeError):
     pass
 
 
+MODEL_REQUEST_TOKEN_LIMITS: dict[tuple[str, str], int] = {
+    ("groq", "openai/gpt-oss-20b"): 8_000,
+    ("groq", "openai/gpt-oss-120b"): 8_000,
+    ("groq", "llama-3.3-70b-versatile"): 8_000,
+    ("groq", "llama-3.1-8b-instant"): 8_000,
+    ("openai", "gpt-4.1-mini"): 32_000,
+    ("openai", "gpt-4.1"): 32_000,
+    ("openai", "gpt-4o-mini"): 32_000,
+    ("gemini", "gemini-2.5-flash"): 32_000,
+    ("gemini", "gemini-2.0-flash"): 32_000,
+    ("gemini", "gemini-1.5-flash"): 32_000,
+}
+
+PROVIDER_REQUEST_TOKEN_LIMITS = {
+    "groq": 8_000,
+    "openai": 32_000,
+    "gemini": 32_000,
+}
+
+KOLAUDIM_PROMPT_OVERHEAD_TOKENS = 1_400
+
+
 SENIOR_REVIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -149,6 +171,7 @@ def request_kolaudim_draft(
     *,
     ai_settings: dict[str, Any],
 ) -> dict[str, Any]:
+    max_output_tokens = kolaudim_draft_max_output_tokens(ai_settings)
     body = {
         "model": ai_settings["model"],
         "messages": [
@@ -161,7 +184,7 @@ def request_kolaudim_draft(
             schema=KOLAUDIM_DRAFT_SCHEMA,
         ),
         "temperature": 0,
-        "max_tokens": max(settings.openai_max_output_tokens, 3000),
+        "max_tokens": max_output_tokens,
     }
     response_payload = _post_json("/chat/completions", body, ai_settings=ai_settings)
     text = _extract_chat_completion_content(response_payload)
@@ -173,6 +196,30 @@ def request_kolaudim_draft(
     if not isinstance(parsed, dict):
         raise LLMReviewError("AI kolaudim writer returned a non-object JSON response.")
     return parsed
+
+
+def model_request_token_limit(ai_settings: dict[str, Any]) -> int:
+    provider = str(ai_settings.get("provider") or "").strip().lower()
+    model = str(ai_settings.get("model") or "").strip()
+    return MODEL_REQUEST_TOKEN_LIMITS.get(
+        (provider, model),
+        PROVIDER_REQUEST_TOKEN_LIMITS.get(provider, 16_000),
+    )
+
+
+def kolaudim_draft_max_output_tokens(ai_settings: dict[str, Any]) -> int:
+    request_limit = model_request_token_limit(ai_settings)
+    configured_limit = max(900, int(settings.openai_max_output_tokens or 1800))
+    if request_limit <= 9_000:
+        return min(configured_limit, 1_800, max(900, request_limit // 4))
+    return min(configured_limit, 4_000, max(1_600, request_limit // 5))
+
+
+def kolaudim_draft_input_token_budget(ai_settings: dict[str, Any]) -> int:
+    request_limit = model_request_token_limit(ai_settings)
+    output_tokens = kolaudim_draft_max_output_tokens(ai_settings)
+    budget = request_limit - output_tokens - KOLAUDIM_PROMPT_OVERHEAD_TOKENS
+    return max(1_500, budget)
 
 
 def _review_user_content(review_input: dict[str, Any]) -> str:

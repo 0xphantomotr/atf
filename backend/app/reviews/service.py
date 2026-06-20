@@ -874,9 +874,9 @@ def _store_report_outputs(
     objects: list[tuple[str, bytes, str, str]] = [
         (
             "json",
-            _json_report_bytes(report),
+            _json_output_bytes(job, report),
             JSON_CONTENT_TYPE,
-            "audit-report.json",
+            f"{_report_output_basename(job)}.json",
         )
     ]
     if "pdf" in output_types:
@@ -884,7 +884,14 @@ def _store_report_outputs(
         from app.reports.renderer import render_audit_report_html
 
         html = render_audit_report_html(report)
-        objects.append(("pdf", html_to_pdf_bytes(html), PDF_CONTENT_TYPE, "audit-report.pdf"))
+        objects.append(
+            (
+                "pdf",
+                html_to_pdf_bytes(html),
+                PDF_CONTENT_TYPE,
+                f"{_report_output_basename(job)}.pdf",
+            )
+        )
 
     from app.files.storage import ensure_bucket_exists, get_minio_client
 
@@ -914,31 +921,13 @@ def _store_report_outputs(
                 storage_bucket=settings.minio_bucket,
                 storage_path=storage_path,
                 text_preview=report.summary[:1000],
-                output_metadata={
-                    "filename": filename,
-                    "content_type": content_type,
-                    "size_bytes": len(content),
-                    "finding_count": len(report.findings),
-                    "recommendation": report.recommendation,
-                    "law_scope": report.law_scope,
-                    "agent_phase": report.agent_metadata.get("phase"),
-                    "agent_trace": report.agent_metadata.get("trace", []),
-                    "kolaudim_readiness": report.agent_metadata.get(
-                        "kolaudim_readiness"
-                    ),
-                    "kolaudim_draft_status": report.agent_metadata.get(
-                        "kolaudim_draft_status"
-                    ),
-                    "ai_review_status": (
-                        report.agent_metadata.get("ai_review", {}).get("status")
-                        if isinstance(report.agent_metadata.get("ai_review"), dict)
-                        else None
-                    ),
-                    "needs_human_review": report.agent_metadata.get(
-                        "needs_human_review",
-                        False,
-                    ),
-                },
+                output_metadata=_output_metadata(
+                    job,
+                    report,
+                    filename=filename,
+                    content_type=content_type,
+                    size_bytes=len(content),
+                ),
             )
         )
 
@@ -1032,6 +1021,12 @@ def _report_title(job: ReviewJob) -> str:
     return "Raport Auditimi Teknik"
 
 
+def _report_output_basename(job: ReviewJob) -> str:
+    if getattr(job, "job_type", None) == "kolaudim_act":
+        return "akt-kolaudimi"
+    return "audit-report"
+
+
 def _report_recommendation(findings: list[Any]) -> str:
     if not findings:
         return "Pa gjetje të rëndësishme"
@@ -1046,6 +1041,12 @@ def _report_summary(
     *,
     agent_state: AuditGraphState | None = None,
 ) -> str:
+    if _is_kolaudim_agent_state(agent_state):
+        clean_summary = _professional_summary_prefix(agent_state).strip()
+        if clean_summary:
+            return clean_summary
+        return "Draft Akt Kolaudimi nuk u gjenerua."
+
     professional_prefix = _professional_summary_prefix(agent_state)
     if not findings:
         return professional_prefix + (
@@ -1079,6 +1080,13 @@ def _professional_summary_prefix(agent_state: AuditGraphState | None) -> str:
     return conclusion + " "
 
 
+def _is_kolaudim_agent_state(agent_state: AuditGraphState | None) -> bool:
+    if not agent_state:
+        return False
+    job = agent_state.get("job", {})
+    return isinstance(job, dict) and job.get("job_type") == "kolaudim_act"
+
+
 def _law_scope_codes(job: ReviewJob) -> list[str]:
     law_scope = job.law_scope or {}
     codes = law_scope.get("codes") if isinstance(law_scope, dict) else None
@@ -1099,9 +1107,99 @@ def _normalize_law_scope(law_scope: list[str] | None) -> tuple[str, ...]:
     return normalized or DEFAULT_LAW_SCOPE
 
 
-def _json_report_bytes(report: AuditReport) -> bytes:
-    report_json = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
+def _output_metadata(
+    job: ReviewJob,
+    report: AuditReport,
+    *,
+    filename: str,
+    content_type: str,
+    size_bytes: int,
+) -> dict[str, Any]:
+    base_metadata: dict[str, Any] = {
+        "filename": filename,
+        "content_type": content_type,
+        "size_bytes": size_bytes,
+        "law_scope": report.law_scope,
+    }
+    if getattr(job, "job_type", None) == "kolaudim_act":
+        return {
+            **base_metadata,
+            "kolaudim_readiness": report.agent_metadata.get("kolaudim_readiness"),
+            "kolaudim_draft_status": report.agent_metadata.get(
+                "kolaudim_draft_status"
+            ),
+            "needs_human_review": report.agent_metadata.get(
+                "needs_human_review",
+                False,
+            ),
+        }
+
+    return {
+        **base_metadata,
+        "finding_count": len(report.findings),
+        "recommendation": report.recommendation,
+        "agent_phase": report.agent_metadata.get("phase"),
+        "agent_trace": report.agent_metadata.get("trace", []),
+        "kolaudim_readiness": report.agent_metadata.get("kolaudim_readiness"),
+        "kolaudim_draft_status": report.agent_metadata.get("kolaudim_draft_status"),
+        "ai_review_status": (
+            report.agent_metadata.get("ai_review", {}).get("status")
+            if isinstance(report.agent_metadata.get("ai_review"), dict)
+            else None
+        ),
+        "needs_human_review": report.agent_metadata.get(
+            "needs_human_review",
+            False,
+        ),
+    }
+
+
+def _json_output_bytes(job: ReviewJob, report: AuditReport) -> bytes:
+    payload: dict[str, Any]
+    if getattr(job, "job_type", None) == "kolaudim_act":
+        payload = _kolaudim_json_payload(report)
+    else:
+        payload = report.model_dump(mode="json")
+    report_json = json.dumps(payload, ensure_ascii=False, indent=2)
     return report_json.encode("utf-8")
+
+
+def _kolaudim_json_payload(report: AuditReport) -> dict[str, Any]:
+    professional = report.professional_analysis or {}
+    draft = professional.get("kolaudim_draft", {})
+    if not isinstance(draft, dict):
+        draft = {}
+
+    payload: dict[str, Any] = {
+        "title": (
+            draft.get("title")
+            if draft.get("status") == "drafted" and draft.get("title")
+            else report.title
+        ),
+        "generated_at": report.generated_at.isoformat(),
+        "project": report.project.model_dump(mode="json"),
+        "law_scope": report.law_scope,
+        "status": draft.get("status") or "not_generated",
+        "executive_summary": draft.get("executive_summary") or report.summary,
+        "sections": draft.get("sections") if isinstance(draft.get("sections"), list) else [],
+        "reservations": (
+            draft.get("reservations") if isinstance(draft.get("reservations"), list) else []
+        ),
+        "human_completion_items": (
+            draft.get("human_completion_items")
+            if isinstance(draft.get("human_completion_items"), list)
+            else []
+        ),
+        "signature_note": draft.get("signature_note") or "",
+        "confidence": draft.get("confidence"),
+        "notice": (
+            "Draft profesional për Akt Kolaudimi. Akti final duhet verifikuar, "
+            "plotësuar dhe nënshkruar nga profesionistët përgjegjës."
+        ),
+    }
+    if draft.get("status") != "drafted" and draft.get("reason"):
+        payload["reason"] = draft.get("reason")
+    return payload
 
 
 def _normalize_output_format(output_format: str) -> str:
