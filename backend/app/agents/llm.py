@@ -2,7 +2,7 @@ import json
 from typing import Any
 from urllib import error, request
 
-from app.agents.prompts import SENIOR_REVIEW_SYSTEM_PROMPT
+from app.agents.prompts import KOLAUDIM_WRITER_SYSTEM_PROMPT, SENIOR_REVIEW_SYSTEM_PROMPT
 from app.core.config import settings
 
 
@@ -69,6 +69,54 @@ SENIOR_REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+KOLAUDIM_DRAFT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "status",
+        "title",
+        "executive_summary",
+        "sections",
+        "reservations",
+        "human_completion_items",
+        "signature_note",
+        "confidence",
+    ],
+    "properties": {
+        "status": {"type": "string", "enum": ["drafted"]},
+        "title": {"type": "string"},
+        "executive_summary": {"type": "string"},
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["code", "title", "body", "evidence_notes"],
+                "properties": {
+                    "code": {"type": "string"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "evidence_notes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+            },
+        },
+        "reservations": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "human_completion_items": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "signature_note": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+}
+
+
 def request_senior_review(
     review_input: dict[str, Any],
     *,
@@ -93,6 +141,37 @@ def request_senior_review(
 
     if not isinstance(parsed, dict):
         raise LLMReviewError("AI reviewer returned a non-object JSON response.")
+    return parsed
+
+
+def request_kolaudim_draft(
+    draft_input: dict[str, Any],
+    *,
+    ai_settings: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        "model": ai_settings["model"],
+        "messages": [
+            {"role": "system", "content": KOLAUDIM_WRITER_SYSTEM_PROMPT},
+            {"role": "user", "content": _kolaudim_user_content(draft_input)},
+        ],
+        "response_format": _schema_response_format(
+            ai_settings,
+            schema_name="atf_kolaudim_draft",
+            schema=KOLAUDIM_DRAFT_SCHEMA,
+        ),
+        "temperature": 0,
+        "max_tokens": max(settings.openai_max_output_tokens, 3000),
+    }
+    response_payload = _post_json("/chat/completions", body, ai_settings=ai_settings)
+    text = _extract_chat_completion_content(response_payload)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LLMReviewError("AI kolaudim writer returned invalid JSON.") from exc
+
+    if not isinstance(parsed, dict):
+        raise LLMReviewError("AI kolaudim writer returned a non-object JSON response.")
     return parsed
 
 
@@ -121,16 +200,53 @@ def _review_user_content(review_input: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _kolaudim_user_content(draft_input: dict[str, Any]) -> str:
+    payload = {
+        "required_output_shape": {
+            "status": "drafted",
+            "title": "Draft Akt Kolaudimi Teknik",
+            "executive_summary": "string",
+            "sections": [
+                {
+                    "code": "legal_basis | project_identity | document_verification | fact_verification | technical_economic_conclusion | reservations | signature_package",
+                    "title": "string",
+                    "body": "paragraphs in Albanian",
+                    "evidence_notes": ["short evidence/source notes"],
+                }
+            ],
+            "reservations": ["string"],
+            "human_completion_items": ["string"],
+            "signature_note": "string",
+            "confidence": "number between 0 and 1",
+        },
+        "draft_input": draft_input,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _response_format(ai_settings: dict[str, Any]) -> dict[str, Any]:
+    return _schema_response_format(
+        ai_settings,
+        schema_name="atf_senior_review",
+        schema=SENIOR_REVIEW_SCHEMA,
+    )
+
+
+def _schema_response_format(
+    ai_settings: dict[str, Any],
+    *,
+    schema_name: str,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
     if ai_settings.get("provider") == "groq":
         return {"type": "json_object"}
 
     return {
         "type": "json_schema",
         "json_schema": {
-            "name": "atf_senior_review",
+            "name": schema_name,
             "strict": True,
-            "schema": SENIOR_REVIEW_SCHEMA,
+            "schema": schema,
         },
     }
 

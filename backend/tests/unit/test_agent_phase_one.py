@@ -7,6 +7,7 @@ from app.agents.nodes.document_classifier import classify_documents
 from app.agents.nodes.evidence_verifier import verify_evidence
 from app.agents.nodes.fact_extractor import extract_project_facts
 from app.agents.nodes.kolaudim_planner import plan_kolaudim_act
+from app.agents.nodes.kolaudim_writer import write_kolaudim_draft
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.report_writer import write_report
@@ -30,6 +31,10 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
             "project_type": "residential",
             "stage": "during_construction",
             "location": "Tirane",
+        },
+        "job": {
+            "job_type": "kolaudim_act",
+            "language": "sq-AL",
         },
         "documents": [
             {
@@ -72,6 +77,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         check_professional_consistency,
         plan_kolaudim_act,
         senior_review,
+        write_kolaudim_draft,
         write_report,
     ):
         state = node(state)
@@ -87,6 +93,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         "consistency_checker",
         "kolaudim_planner",
         "senior_reviewer",
+        "kolaudim_writer",
         "report_writer",
     ]
     assert state["document_inventory"]["total_documents"] == 2
@@ -101,7 +108,10 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
     assert state["needs_human_review"]
     assert state["ai_review"]["status"] == "skipped"
     assert state["ai_review"]["reason"] == "missing_user_ai_settings"
+    assert state["kolaudim_draft"]["status"] == "skipped"
+    assert state["kolaudim_draft"]["reason"] == "missing_user_ai_settings"
     assert state["report"]["phase"] == "professional_kolaudim_phase_1"
+    assert state["report"]["kolaudim_draft_status"] == "skipped"
     assert state["report"]["ai_review_status"] == "skipped"
     assert state["report"]["finding_count"] == 1
 

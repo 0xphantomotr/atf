@@ -18,6 +18,7 @@ class AuditGraphState(TypedDict, total=False):
     verified_findings: list[dict[str, Any]]
     consistency_review: dict[str, Any]
     kolaudim_analysis: dict[str, Any]
+    kolaudim_draft: dict[str, Any]
     ai_settings: dict[str, Any]
     ai_review: dict[str, Any]
     require_ai_review: bool

@@ -194,18 +194,37 @@ def test_audit_report_compacts_historical_files_checked_evidence() -> None:
                 "readiness": "draft_with_reservations",
                 "professional_conclusion": "Draft me rezerva.",
             },
+            "kolaudim_draft": {
+                "status": "drafted",
+                "title": "Draft Akt Kolaudimi Teknik",
+                "executive_summary": "Ky është drafti narrativ.",
+                "sections": [
+                    {
+                        "code": "legal_basis",
+                        "title": "Baza ligjore",
+                        "body": "Drafti mbështetet në VKM 610/2022.",
+                        "evidence_notes": ["VKM 610/2022"],
+                    }
+                ],
+                "reservations": ["Ka gjetje të hapura."],
+                "human_completion_items": ["Verifikoni palët."],
+                "signature_note": "Për nënshkrim nga palët përgjegjëse.",
+                "confidence": 0.75,
+            },
             "report": {"phase": "professional_kolaudim_phase_1"},
         },
     )
 
     assert report.title == "Draft Akt Kolaudimi Teknik"
-    assert report.summary.startswith("Draft me rezerva.")
+    assert report.summary.startswith("Ky është drafti narrativ.")
     assert report.professional_analysis["kolaudim_analysis"]["readiness"] == (
         "draft_with_reservations"
     )
     html = render_audit_report_html(report)
     assert "Analiza profesionale për kolaudim" in html
     assert "Draft Akt Kolaudimi Teknik" in html
+    assert "Drafti mbështetet në VKM 610/2022." in html
+    assert "Për nënshkrim nga palët përgjegjëse." in html
     assert report.project.name == "Godine banimi"
     assert report.document_summary.total_files == 2
     assert report.document_summary.classified_files == 1

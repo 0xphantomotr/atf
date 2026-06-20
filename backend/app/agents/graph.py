@@ -7,6 +7,7 @@ from app.agents.nodes.document_classifier import classify_documents
 from app.agents.nodes.evidence_verifier import verify_evidence
 from app.agents.nodes.fact_extractor import extract_project_facts
 from app.agents.nodes.kolaudim_planner import plan_kolaudim_act
+from app.agents.nodes.kolaudim_writer import write_kolaudim_draft
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.report_writer import write_report
@@ -36,6 +37,7 @@ def build_audit_graph() -> Any:
     workflow.add_node("consistency_checker", check_professional_consistency)
     workflow.add_node("kolaudim_planner", plan_kolaudim_act)
     workflow.add_node("senior_reviewer", senior_review)
+    workflow.add_node("kolaudim_writer", write_kolaudim_draft)
     workflow.add_node("report_writer", write_report)
 
     workflow.set_entry_point("project_context")
@@ -48,7 +50,8 @@ def build_audit_graph() -> Any:
     workflow.add_edge("evidence_verifier", "consistency_checker")
     workflow.add_edge("consistency_checker", "kolaudim_planner")
     workflow.add_edge("kolaudim_planner", "senior_reviewer")
-    workflow.add_edge("senior_reviewer", "report_writer")
+    workflow.add_edge("senior_reviewer", "kolaudim_writer")
+    workflow.add_edge("kolaudim_writer", "report_writer")
     workflow.add_edge("report_writer", END)
 
     return workflow.compile()

@@ -810,6 +810,7 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
     vkm_obligations = agent_state.get("vkm_obligation_map", {})
     consistency_review = agent_state.get("consistency_review", {})
     kolaudim_analysis = agent_state.get("kolaudim_analysis", {})
+    kolaudim_draft = agent_state.get("kolaudim_draft", {})
     return {
         "phase": (
             report_phase
@@ -841,6 +842,9 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
             if isinstance(kolaudim_analysis, dict)
             else None
         ),
+        "kolaudim_draft_status": (
+            kolaudim_draft.get("status") if isinstance(kolaudim_draft, dict) else None
+        ),
         "ai_review": dict(ai_review) if isinstance(ai_review, dict) else {},
         "report": dict(report) if isinstance(report, dict) else {},
     }
@@ -855,6 +859,7 @@ def _professional_analysis(agent_state: AuditGraphState | None) -> dict[str, obj
         "vkm_obligation_map": dict(agent_state.get("vkm_obligation_map", {})),
         "consistency_review": dict(agent_state.get("consistency_review", {})),
         "kolaudim_analysis": dict(agent_state.get("kolaudim_analysis", {})),
+        "kolaudim_draft": dict(agent_state.get("kolaudim_draft", {})),
     }
 
 
@@ -920,6 +925,9 @@ def _store_report_outputs(
                     "agent_trace": report.agent_metadata.get("trace", []),
                     "kolaudim_readiness": report.agent_metadata.get(
                         "kolaudim_readiness"
+                    ),
+                    "kolaudim_draft_status": report.agent_metadata.get(
+                        "kolaudim_draft_status"
                     ),
                     "ai_review_status": (
                         report.agent_metadata.get("ai_review", {}).get("status")
@@ -1056,6 +1064,12 @@ def _report_summary(
 def _professional_summary_prefix(agent_state: AuditGraphState | None) -> str:
     if not agent_state:
         return ""
+    kolaudim_draft = agent_state.get("kolaudim_draft", {})
+    if isinstance(kolaudim_draft, dict) and kolaudim_draft.get("status") == "drafted":
+        draft_summary = str(kolaudim_draft.get("executive_summary") or "").strip()
+        if draft_summary:
+            return draft_summary + " "
+
     kolaudim_analysis = agent_state.get("kolaudim_analysis", {})
     if not isinstance(kolaudim_analysis, dict):
         return ""

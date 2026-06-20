@@ -1,6 +1,11 @@
 import json
 
-from app.agents.llm import _post_json, _response_format, request_senior_review
+from app.agents.llm import (
+    _post_json,
+    _response_format,
+    request_kolaudim_draft,
+    request_senior_review,
+)
 
 
 class _FakeResponse:
@@ -93,3 +98,50 @@ def test_request_senior_review_adds_output_shape_to_prompt(monkeypatch) -> None:
     assert "required_output_shape" in user_payload
     assert user_payload["audit_input"]["project"]["name"] == "Test"
     assert review["status"] == "reviewed"
+
+
+def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post_json(path, body, *, ai_settings):
+        captured["path"] = path
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "status": "drafted",
+                                "title": "Draft Akt Kolaudimi Teknik",
+                                "executive_summary": "Draft.",
+                                "sections": [],
+                                "reservations": [],
+                                "human_completion_items": [],
+                                "signature_note": "Për nënshkrim.",
+                                "confidence": 0.7,
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.agents.llm._post_json", fake_post_json)
+
+    draft = request_kolaudim_draft(
+        {"project": {"name": "Test"}},
+        ai_settings={
+            "provider": "groq",
+            "model": "openai/gpt-oss-20b",
+            "base_url": "https://api.groq.com/openai/v1",
+            "api_key": "gsk_test",
+        },
+    )
+
+    user_payload = json.loads(captured["body"]["messages"][1]["content"])
+    assert captured["path"] == "/chat/completions"
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert "required_output_shape" in user_payload
+    assert user_payload["draft_input"]["project"]["name"] == "Test"
+    assert draft["status"] == "drafted"

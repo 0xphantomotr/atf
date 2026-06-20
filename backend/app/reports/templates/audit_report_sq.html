@@ -132,6 +132,53 @@
     {% set fact_categories = facts.get("categories", {}) %}
     {% set vkm_map = professional.get("vkm_obligation_map", {}) %}
     {% set consistency = professional.get("consistency_review", {}) %}
+    {% set draft = professional.get("kolaudim_draft", {}) %}
+
+    {% if draft and draft.get("status") == "drafted" %}
+    <h2>Draft Akt Kolaudimi</h2>
+    {% if draft.get("executive_summary") %}
+    <p>{{ draft.get("executive_summary") }}</p>
+    {% endif %}
+    {% for section in draft.get("sections", []) %}
+    <h3>{{ section.title }}</h3>
+    {% for paragraph in section.body.split("\n") %}
+    {% if paragraph.strip() %}
+    <p>{{ paragraph }}</p>
+    {% endif %}
+    {% endfor %}
+    {% if section.get("evidence_notes") %}
+    <p><strong>Evidencë:</strong></p>
+    <ul>
+      {% for note in section.get("evidence_notes", []) %}
+      <li>{{ note }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endfor %}
+    {% if draft.get("reservations") %}
+    <h3>Rezerva</h3>
+    <ul>
+      {% for reservation in draft.get("reservations", []) %}
+      <li>{{ reservation }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if draft.get("human_completion_items") %}
+    <h3>Për plotësim/verifikim njerëzor</h3>
+    <ul>
+      {% for item in draft.get("human_completion_items", []) %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if draft.get("signature_note") %}
+    <h3>Shënim për nënshkrim</h3>
+    <p>{{ draft.get("signature_note") }}</p>
+    {% endif %}
+    {% elif draft and draft.get("status") in ["failed", "skipped"] %}
+    <h2>Draft Akt Kolaudimi</h2>
+    <p>Drafti narrativ AI nuk u gjenerua: {{ draft.get("reason") or draft.get("status") }}.</p>
+    {% endif %}
 
     <h2>Analiza profesionale për kolaudim</h2>
     {% if kolaudim %}

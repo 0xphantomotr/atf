@@ -7,6 +7,7 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
     findings = state.get("verified_findings", state.get("findings", []))
     ai_review = state.get("ai_review", {})
     kolaudim_analysis = state.get("kolaudim_analysis", {})
+    kolaudim_draft = state.get("kolaudim_draft", {})
     needs_human_review = bool(state.get("needs_human_review", False))
 
     total_documents = int(inventory.get("total_documents", 0) or 0)
@@ -40,6 +41,11 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
         "finding_count": finding_count,
         "verified_finding_count": len(state.get("verified_findings", [])),
         "ai_review_status": ai_review.get("status", "not_run"),
+        "kolaudim_draft_status": (
+            kolaudim_draft.get("status")
+            if isinstance(kolaudim_draft, dict)
+            else "not_run"
+        ),
         "professional_readiness": (
             kolaudim_analysis.get("readiness")
             if isinstance(kolaudim_analysis, dict)
