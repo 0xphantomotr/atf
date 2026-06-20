@@ -78,16 +78,9 @@ def request_senior_review(
         "model": ai_settings["model"],
         "messages": [
             {"role": "system", "content": SENIOR_REVIEW_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(review_input, ensure_ascii=False)},
+            {"role": "user", "content": _review_user_content(review_input)},
         ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "atf_senior_review",
-                "strict": True,
-                "schema": SENIOR_REVIEW_SCHEMA,
-            },
-        },
+        "response_format": _response_format(ai_settings),
         "temperature": 0,
         "max_tokens": settings.openai_max_output_tokens,
     }
@@ -103,6 +96,45 @@ def request_senior_review(
     return parsed
 
 
+def _review_user_content(review_input: dict[str, Any]) -> str:
+    payload = {
+        "required_output_shape": {
+            "status": "reviewed",
+            "executive_summary": "string",
+            "recommendation": "string",
+            "finding_reviews": [
+                {
+                    "rule_code": "string",
+                    "decision": "supported | needs_human_review | insufficient_evidence",
+                    "reasoning_sq": "string",
+                    "evidence_assessment": "string",
+                    "suggested_action": "string",
+                }
+            ],
+            "unknown_document_notes": ["string"],
+            "human_review_required": "boolean",
+            "confidence": "number between 0 and 1",
+            "limitations": ["string"],
+        },
+        "audit_input": review_input,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _response_format(ai_settings: dict[str, Any]) -> dict[str, Any]:
+    if ai_settings.get("provider") == "groq":
+        return {"type": "json_object"}
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "atf_senior_review",
+            "strict": True,
+            "schema": SENIOR_REVIEW_SCHEMA,
+        },
+    }
+
+
 def _post_json(
     path: str,
     body: dict[str, Any],
@@ -115,7 +147,9 @@ def _post_json(
         data=json.dumps(body).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {ai_settings['api_key']}",
+            "Accept": "application/json",
             "Content-Type": "application/json",
+            "User-Agent": "AuditimiTeknikBot/0.1",
         },
         method="POST",
     )
@@ -128,9 +162,13 @@ def _post_json(
             data = response.read().decode("utf-8")
     except error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
-        raise LLMReviewError(f"OpenAI API request failed: {exc.code} {details[:500]}") from exc
+        provider_label = ai_settings.get("provider_label") or ai_settings.get("provider") or "AI"
+        raise LLMReviewError(
+            f"{provider_label} API request failed: {exc.code} {details[:500]}"
+        ) from exc
     except error.URLError as exc:
-        raise LLMReviewError(f"OpenAI API request failed: {exc.reason}") from exc
+        provider_label = ai_settings.get("provider_label") or ai_settings.get("provider") or "AI"
+        raise LLMReviewError(f"{provider_label} API request failed: {exc.reason}") from exc
 
     try:
         parsed = json.loads(data)
