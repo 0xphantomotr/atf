@@ -10,6 +10,7 @@ class GenerateRequest(BaseModel):
     language: str = "sq-AL"
     law_scope: list[str] = Field(default_factory=lambda: ["VKM_610_2022"])
     user_prompt: str | None = None
+    require_ai_review: bool = True
 
 
 class ReviewJobRead(BaseModel):

@@ -5,35 +5,42 @@ from app.core.config import settings
 
 def senior_review(state: AuditGraphState) -> AuditGraphState:
     state.setdefault("agent_trace", []).append("senior_reviewer")
+    ai_settings = state.get("ai_settings")
 
     if not settings.ai_senior_review_enabled:
         state["ai_review"] = {
             "status": "skipped",
             "reason": "ai_senior_review_disabled",
-            "model": settings.openai_model,
         }
+        if state.get("require_ai_review"):
+            state["needs_human_review"] = True
         return state
 
-    if not settings.openai_api_key:
+    if not isinstance(ai_settings, dict) or not ai_settings.get("api_key"):
         state["ai_review"] = {
             "status": "skipped",
-            "reason": "missing_openai_api_key",
-            "model": settings.openai_model,
+            "reason": "missing_user_ai_settings",
         }
+        if state.get("require_ai_review"):
+            state["needs_human_review"] = True
         return state
 
     try:
-        review = request_senior_review(_build_review_input(state))
+        review = request_senior_review(_build_review_input(state), ai_settings=ai_settings)
     except LLMReviewError as exc:
         state["ai_review"] = {
             "status": "failed",
             "reason": str(exc)[:500],
-            "model": settings.openai_model,
+            "provider": ai_settings.get("provider"),
+            "model": ai_settings.get("model"),
         }
         state["needs_human_review"] = True
         return state
 
     normalized_review = _normalize_ai_review(review)
+    normalized_review["provider"] = ai_settings.get("provider")
+    normalized_review["model"] = ai_settings.get("model")
+    normalized_review["api_key_hint"] = ai_settings.get("api_key_hint")
     state["ai_review"] = normalized_review
     if normalized_review.get("human_review_required"):
         state["needs_human_review"] = True
@@ -105,7 +112,6 @@ def _normalize_ai_review(review: dict) -> dict:
 
     return {
         "status": "reviewed",
-        "model": settings.openai_model,
         "executive_summary": str(review.get("executive_summary", "")).strip(),
         "recommendation": str(review.get("recommendation", "")).strip(),
         "finding_reviews": normalized_finding_reviews,

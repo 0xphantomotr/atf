@@ -18,7 +18,6 @@ from app.reviews.service import (
 
 
 def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "ai_senior_review_enabled", True)
     state = {
         "project": {
@@ -50,6 +49,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
                 "evidence": {"missing_document_types": ["forty_five_day_report"]},
             }
         ],
+        "require_ai_review": True,
         "agent_trace": [],
     }
 
@@ -80,7 +80,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
     assert state["findings"][0]["evidence_verified"]
     assert state["needs_human_review"]
     assert state["ai_review"]["status"] == "skipped"
-    assert state["ai_review"]["reason"] == "missing_openai_api_key"
+    assert state["ai_review"]["reason"] == "missing_user_ai_settings"
     assert state["report"]["phase"] == "langgraph_phase_2"
     assert state["report"]["ai_review_status"] == "skipped"
     assert state["report"]["finding_count"] == 1
@@ -168,14 +168,14 @@ def test_build_agent_state_serializes_review_inputs() -> None:
 
 
 def test_senior_reviewer_can_be_disabled(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "openai_api_key", "test-key")
     monkeypatch.setattr(settings, "ai_senior_review_enabled", False)
 
-    state = senior_review({"agent_trace": []})
+    state = senior_review({"agent_trace": [], "require_ai_review": True})
 
     assert state["agent_trace"] == ["senior_reviewer"]
     assert state["ai_review"]["status"] == "skipped"
     assert state["ai_review"]["reason"] == "ai_senior_review_disabled"
+    assert state["needs_human_review"]
 
 def test_agent_metadata_is_report_safe() -> None:
     metadata = _agent_metadata(
@@ -185,7 +185,7 @@ def test_agent_metadata_is_report_safe() -> None:
             "document_inventory": {"total_documents": 2},
             "law_context": {"rule_count": 1},
             "completeness_summary": {"finding_count": 1},
-            "ai_review": {"status": "skipped", "reason": "missing_openai_api_key"},
+            "ai_review": {"status": "skipped", "reason": "missing_user_ai_settings"},
             "report": {"phase": "langgraph_phase_2"},
         }
     )

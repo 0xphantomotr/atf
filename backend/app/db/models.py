@@ -1,3 +1,4 @@
+from app.ai.models import UserAISetting
 from app.audit_log.models import AuditLog
 from app.files.models import DocumentChunk, FileVersion, ParsedDocument, ProjectFile
 from app.laws.models import LawArticle, LawChunk, LawDocument
@@ -25,5 +26,5 @@ __all__ = [
     "Rule",
     "TelegramAccount",
     "User",
+    "UserAISetting",
 ]
-

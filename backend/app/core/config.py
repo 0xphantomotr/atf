@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = Field(default="change-me", min_length=1)
 
+    user_api_key_encryption_secret: str = "local-dev-insecure-change-me"
+
     openai_api_key: str = ""
     openai_api_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"

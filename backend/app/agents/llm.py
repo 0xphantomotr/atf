@@ -69,9 +69,13 @@ SENIOR_REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
-def request_senior_review(review_input: dict[str, Any]) -> dict[str, Any]:
+def request_senior_review(
+    review_input: dict[str, Any],
+    *,
+    ai_settings: dict[str, Any],
+) -> dict[str, Any]:
     body = {
-        "model": settings.openai_model,
+        "model": ai_settings["model"],
         "messages": [
             {"role": "system", "content": SENIOR_REVIEW_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(review_input, ensure_ascii=False)},
@@ -87,7 +91,7 @@ def request_senior_review(review_input: dict[str, Any]) -> dict[str, Any]:
         "temperature": 0,
         "max_tokens": settings.openai_max_output_tokens,
     }
-    response_payload = _post_json("/chat/completions", body)
+    response_payload = _post_json("/chat/completions", body, ai_settings=ai_settings)
     text = _extract_chat_completion_content(response_payload)
     try:
         parsed = json.loads(text)
@@ -99,13 +103,18 @@ def request_senior_review(review_input: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
-def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
-    base_url = settings.openai_api_base_url.rstrip("/")
+def _post_json(
+    path: str,
+    body: dict[str, Any],
+    *,
+    ai_settings: dict[str, Any],
+) -> dict[str, Any]:
+    base_url = str(ai_settings["base_url"]).rstrip("/")
     api_request = request.Request(
         f"{base_url}{path}",
         data=json.dumps(body).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Authorization": f"Bearer {ai_settings['api_key']}",
             "Content-Type": "application/json",
         },
         method="POST",

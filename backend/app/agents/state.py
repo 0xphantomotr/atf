@@ -14,7 +14,9 @@ class AuditGraphState(TypedDict, total=False):
     findings: list[dict[str, Any]]
     completeness_summary: dict[str, Any]
     verified_findings: list[dict[str, Any]]
+    ai_settings: dict[str, Any]
     ai_review: dict[str, Any]
+    require_ai_review: bool
     report: dict[str, Any]
     needs_human_review: bool
     agent_trace: list[str]

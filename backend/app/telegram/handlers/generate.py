@@ -2,6 +2,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.ai import service as ai_service
 from app.db.session import AsyncSessionLocal
 from app.reviews import service as reviews_service
 from app.reviews.schemas import GenerateRequest
@@ -20,6 +21,16 @@ async def generate_report(message: Message) -> None:
                 "Nuk keni projekt aktiv.\n\n"
                 "Krijoni një projekt me:\n"
                 "/projekt_ri Emri i projektit"
+            )
+            return
+        ai_setting = await ai_service.get_user_ai_setting(session, user_id=user.id)
+        if ai_setting is None:
+            await message.answer(
+                "Gjenerimi me AI kërkon API key personale.\n\n"
+                "Konfiguroni fillimisht:\n"
+                "/ai_key provider api_key\n\n"
+                "Provider të mbështetur: openai, gemini, groq\n"
+                "Pastaj përdorni /ai_models dhe /ai_model për të zgjedhur modelin."
             )
             return
 

@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import service as ai_service
 from app.agents.graph import run_audit_graph
 from app.agents.state import AuditGraphState
 from app.core.config import settings
@@ -155,6 +156,8 @@ async def create_review_job(
     output_format = _normalize_output_format(payload.output_format)
     project = await _get_project_for_user(session, project_id=project_id, user_id=user_id)
     law_scope = _normalize_law_scope(payload.law_scope)
+    if payload.require_ai_review:
+        await ai_service.require_user_ai_setting(session, user_id=user_id)
 
     job = ReviewJob(
         project_id=project.id,
@@ -164,7 +167,10 @@ async def create_review_job(
         language=payload.language,
         output_format=output_format,
         user_prompt=payload.user_prompt,
-        law_scope={"codes": list(law_scope)},
+        law_scope={
+            "codes": list(law_scope),
+            "require_ai_review": payload.require_ai_review,
+        },
         progress=0,
     )
     session.add(job)
@@ -208,6 +214,12 @@ async def run_queued_review_job(
 
         current_files = await _load_current_file_snapshots(session, project_id=project.id)
         rule_contexts = await _load_validated_rule_contexts(session, law_scope=law_scope)
+        ai_settings = await ai_service.get_user_ai_credentials(
+            session,
+            user_id=job.requested_by,
+        )
+        if _job_requires_ai_review(job) and ai_settings is None:
+            raise ValueError("Ky auditim kërkon konfigurim të AI API key për përdoruesin.")
         if not rule_contexts:
             raise ValueError(
                 "Nuk u gjetën rregulla të validuara për fushën ligjore të kërkuar."
@@ -230,6 +242,8 @@ async def run_queued_review_job(
             current_files=current_files,
             rule_contexts=rule_contexts,
             findings=findings,
+            ai_settings=ai_settings,
+            require_ai_review=_job_requires_ai_review(job),
         )
 
         job.progress = 70
@@ -316,12 +330,15 @@ async def get_review_job_outputs(
         session,
         law_scope=tuple(_law_scope_codes(job)),
     )
+    ai_settings = await ai_service.get_user_ai_credentials(session, user_id=job.requested_by)
     agent_state = _run_phase_one_audit_graph(
         project=project,
         job=job,
         current_files=current_files,
         rule_contexts=rule_contexts,
         findings=findings,
+        ai_settings=ai_settings,
+        require_ai_review=_job_requires_ai_review(job),
     )
     report = _build_audit_report(
         project=project,
@@ -597,6 +614,8 @@ def _run_phase_one_audit_graph(
     current_files: list[CurrentFileSnapshot],
     rule_contexts: list[RuleContext],
     findings: list[ReviewFinding],
+    ai_settings: dict[str, Any] | None,
+    require_ai_review: bool,
 ) -> AuditGraphState:
     return run_audit_graph(
         _build_agent_state(
@@ -605,6 +624,8 @@ def _run_phase_one_audit_graph(
             current_files=current_files,
             rule_contexts=rule_contexts,
             findings=findings,
+            ai_settings=ai_settings,
+            require_ai_review=require_ai_review,
         )
     )
 
@@ -616,6 +637,8 @@ def _build_agent_state(
     current_files: list[CurrentFileSnapshot],
     rule_contexts: list[RuleContext],
     findings: list[ReviewFinding],
+    ai_settings: dict[str, Any] | None = None,
+    require_ai_review: bool = True,
 ) -> AuditGraphState:
     return {
         "project": {
@@ -636,6 +659,8 @@ def _build_agent_state(
         "documents": [_current_file_as_dict(current_file) for current_file in current_files],
         "rules": [_rule_context_as_dict(context) for context in rule_contexts],
         "findings": [_structured_finding(finding) for finding in findings],
+        "ai_settings": ai_settings or {},
+        "require_ai_review": require_ai_review,
         "needs_human_review": False,
         "agent_trace": [],
     }
@@ -965,6 +990,13 @@ def _law_scope_codes(job: ReviewJob) -> list[str]:
     if isinstance(codes, list):
         return [code for code in codes if isinstance(code, str)]
     return list(DEFAULT_LAW_SCOPE)
+
+
+def _job_requires_ai_review(job: ReviewJob) -> bool:
+    law_scope = job.law_scope or {}
+    if isinstance(law_scope, dict) and "require_ai_review" in law_scope:
+        return bool(law_scope.get("require_ai_review"))
+    return True
 
 
 def _normalize_law_scope(law_scope: list[str] | None) -> tuple[str, ...]:

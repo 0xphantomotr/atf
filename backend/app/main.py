@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.ai.routes import router as ai_settings_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.files.routes import router as files_router
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(telegram_router)
+    app.include_router(ai_settings_router)
     app.include_router(users_router)
     app.include_router(projects_router)
     app.include_router(files_router)
