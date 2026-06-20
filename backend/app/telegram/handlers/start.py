@@ -41,8 +41,9 @@ def _help_text() -> str:
         "/ai_models - shfaq modelet e provider-it\n"
         "/ai_model model - zgjedh modelin aktiv\n"
         "/ai_delete - fshin API key personale\n"
-        "/gjenero - nis auditimin VKM 610/2022\n"
-        "/status - kontrollon statusin e auditimit\n"
-        "/raportet - dërgon raportin PDF të fundit\n\n"
+        "/gjenero - nis Draft Akt Kolaudimi profesional\n"
+        "/kolaudim ose /akt - alias për /gjenero\n"
+        "/status - kontrollon statusin e gjenerimit\n"
+        "/raportet - dërgon Draft Akt Kolaudimin PDF të fundit\n\n"
         "Projekti aktiv është projekti më i fundit i krijuar."
     )

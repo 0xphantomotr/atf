@@ -86,5 +86,5 @@ async def upload_document(message: Message) -> None:
         f"Projekti: {project.name}\n"
         f"Dokumente të importuara: {uploaded_count}\n"
         f"Të anashkaluara: {skipped_count}\n\n"
-        "Përdorni /dokumentet për listën ose /gjenero për auditim pasi përpunimi të mbarojë."
+        "Përdorni /dokumentet për listën ose /gjenero për Draft Akt Kolaudimi pasi përpunimi të mbarojë."
     )

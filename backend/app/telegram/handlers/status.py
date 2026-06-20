@@ -29,7 +29,7 @@ async def status_command(message: Message) -> None:
         )
         if job is None:
             await message.answer(
-                "Nuk ka ende auditim për projektin aktiv.\n\n"
+                "Nuk ka ende Akt Kolaudimi për projektin aktiv.\n\n"
                 "Niseni me /gjenero."
             )
             return
@@ -49,8 +49,8 @@ async def status_command(message: Message) -> None:
         f"Progresi: {job.progress}%",
     ]
     if job.status == "completed":
-        lines.append(f"Gjetje të hapura: {findings_count}")
-        lines.append("Raportin mund ta merrni me /raportet.")
+        lines.append(f"Çështje për verifikim: {findings_count}")
+        lines.append("Draft Akt Kolaudimin mund ta merrni me /raportet.")
     elif job.status == "failed":
         lines.append(f"Gabim: {job.error_message or 'i panjohur'}")
     else:

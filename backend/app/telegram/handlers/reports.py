@@ -36,13 +36,13 @@ async def reports_command(message: Message) -> None:
             )
             if latest_job is not None:
                 await message.answer(
-                    "Raporti nuk është ende gati.\n\n"
+                    "Draft Akt Kolaudimi nuk është ende gati.\n\n"
                     f"Statusi aktual: {latest_job.status} ({latest_job.progress}%)."
                 )
             else:
                 await message.answer(
-                    "Nuk ka raport për projektin aktiv.\n\n"
-                    "Niseni auditimin me /gjenero."
+                    "Nuk ka ende Akt Kolaudimi për projektin aktiv.\n\n"
+                    "Niseni gjenerimin me /gjenero."
                 )
             return
 
@@ -56,7 +56,7 @@ async def reports_command(message: Message) -> None:
             None,
         )
         if pdf_output is None:
-            await message.answer("Nuk u gjet raport PDF për auditimin e fundit.")
+            await message.answer("Nuk u gjet PDF për Akt Kolaudimin e fundit.")
             return
 
         download = await reviews_service.download_generated_output(
@@ -67,5 +67,5 @@ async def reports_command(message: Message) -> None:
 
     await message.answer_document(
         BufferedInputFile(download.content, filename=download.filename),
-        caption=f"Raporti i auditimit për projektin: {project.name}",
+        caption=f"Draft Akt Kolaudimi për projektin: {project.name}",
     )

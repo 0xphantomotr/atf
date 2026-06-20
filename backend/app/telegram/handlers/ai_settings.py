@@ -138,7 +138,7 @@ async def ai_settings_callback(callback: CallbackQuery) -> None:
 def _ai_help_text() -> str:
     return (
         "AI nuk është konfiguruar ende.\n\n"
-        "Gjenerimi i auditimit kërkon API key personale.\n\n"
+        "Gjenerimi i Draft Akt Kolaudimit kërkon API key personale.\n\n"
         "1. Ruani key:\n"
         "/ai_key provider api_key\n\n"
         "Provider të mbështetur: openai, gemini, groq\n\n"

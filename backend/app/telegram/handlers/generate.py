@@ -11,8 +11,8 @@ from app.telegram.service import get_active_project, get_or_create_message_user
 router = Router()
 
 
-@router.message(Command("gjenero", "generate"))
-async def generate_report(message: Message) -> None:
+@router.message(Command("gjenero", "generate", "kolaudim", "akt"))
+async def generate_kolaudim_act(message: Message) -> None:
     async with AsyncSessionLocal() as session:
         user = await get_or_create_message_user(session, message)
         project = await get_active_project(session, user_id=user.id)
@@ -26,7 +26,7 @@ async def generate_report(message: Message) -> None:
         ai_setting = await ai_service.get_user_ai_setting(session, user_id=user.id)
         if ai_setting is None:
             await message.answer(
-                "Gjenerimi me AI kërkon API key personale.\n\n"
+                "Draft Akt Kolaudimi kërkon API key personale për AI.\n\n"
                 "Konfiguroni fillimisht:\n"
                 "/ai_key provider api_key\n\n"
                 "Provider të mbështetur: openai, gemini, groq\n"
@@ -39,7 +39,7 @@ async def generate_report(message: Message) -> None:
             project_id=project.id,
             user_id=user.id,
             payload=GenerateRequest(
-                job_type="documentation_checklist",
+                job_type="kolaudim_act",
                 output_format="pdf",
                 language="sq-AL",
                 law_scope=["VKM_610_2022"],
@@ -47,7 +47,7 @@ async def generate_report(message: Message) -> None:
         )
 
     await message.answer(
-        "Auditimi u vendos në radhë.\n\n"
+        "Draft Akt Kolaudimi u vendos në radhë.\n\n"
         f"Projekti: {project.name}\n"
         f"Statusi: {job.status}\n\n"
         "Përdorni /status për ecurinë dhe /raportet kur të përfundojë."
