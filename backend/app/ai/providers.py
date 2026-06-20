@@ -5,7 +5,16 @@ from urllib import error, request
 
 
 class AIProviderError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        allow_curated_fallback: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.allow_curated_fallback = allow_curated_fallback
 
 
 @dataclass(frozen=True)
@@ -57,7 +66,11 @@ def get_provider(provider_id: str) -> AIProvider:
 def list_provider_models(provider: AIProvider, api_key: str) -> list[str]:
     api_request = request.Request(
         f"{provider.base_url.rstrip('/')}/models",
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "AuditimiTeknikBot/0.1",
+        },
         method="GET",
     )
     try:
@@ -65,12 +78,16 @@ def list_provider_models(provider: AIProvider, api_key: str) -> list[str]:
             payload = json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
+        allow_curated_fallback = exc.code == 403 and "1010" in details
         raise AIProviderError(
-            f"Nuk u verifikua API key për {provider.label}: {exc.code} {details[:300]}"
+            f"Nuk u verifikua API key për {provider.label}: {exc.code} {details[:300]}",
+            status_code=exc.code,
+            allow_curated_fallback=allow_curated_fallback,
         ) from exc
     except error.URLError as exc:
         raise AIProviderError(
-            f"Nuk u lidhëm dot me {provider.label}: {exc.reason}"
+            f"Nuk u lidhëm dot me {provider.label}: {exc.reason}",
+            allow_curated_fallback=True,
         ) from exc
     except json.JSONDecodeError as exc:
         raise AIProviderError(f"{provider.label} ktheu përgjigje të pavlefshme.") from exc

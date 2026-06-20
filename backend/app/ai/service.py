@@ -161,6 +161,8 @@ def _validated_models(provider_id: str, api_key: str) -> list[str]:
     try:
         return list_provider_models(provider, api_key)
     except AIProviderError as exc:
+        if exc.allow_curated_fallback:
+            return curated_models(provider)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
