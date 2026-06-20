@@ -40,6 +40,7 @@ class AuditReport(BaseModel):
     recommendation: str
     summary: str
     findings: list[StructuredFinding] = Field(default_factory=list)
+    professional_analysis: dict[str, object] = Field(default_factory=dict)
     required_actions: list[str] = Field(default_factory=list)
     appendices: list[str] = Field(default_factory=list)
     agent_metadata: dict[str, object] = Field(default_factory=dict)

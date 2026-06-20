@@ -52,6 +52,21 @@
         margin-top: 8px;
         padding-left: 18px;
       }
+      .status-ready, .status-complete {
+        color: #166534;
+        font-weight: bold;
+      }
+      .status-partial, .status-draft_with_reservations {
+        color: #92400e;
+        font-weight: bold;
+      }
+      .status-needs_input,
+      .status-missing,
+      .status-needs_core_evidence_before_kolaudim,
+      .status-needs_review {
+        color: #991b1b;
+        font-weight: bold;
+      }
     </style>
   </head>
   <body>
@@ -109,6 +124,139 @@
 
     <h2>Rekomandimi</h2>
     <p>{{ report.recommendation }}</p>
+
+    {% set professional = report.professional_analysis %}
+    {% if professional %}
+    {% set kolaudim = professional.get("kolaudim_analysis", {}) %}
+    {% set facts = professional.get("extracted_facts", {}) %}
+    {% set fact_categories = facts.get("categories", {}) %}
+    {% set vkm_map = professional.get("vkm_obligation_map", {}) %}
+    {% set consistency = professional.get("consistency_review", {}) %}
+
+    <h2>Analiza profesionale për kolaudim</h2>
+    {% if kolaudim %}
+    <table>
+      <tbody>
+        <tr>
+          <th>Gatishmëria</th>
+          <td class="status-{{ kolaudim.get('readiness') }}">{{ kolaudim.get("readiness") or "-" }}</td>
+        </tr>
+        <tr>
+          <th>Konkluzioni profesional</th>
+          <td>{{ kolaudim.get("professional_conclusion") or "-" }}</td>
+        </tr>
+        <tr>
+          <th>Metoda</th>
+          <td>{{ kolaudim.get("method") or "-" }}</td>
+        </tr>
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if fact_categories %}
+    <h3>Faktet e nxjerra nga dosja</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Kategoria</th>
+          <th>Vlera</th>
+          <th>Burimi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for category, items in fact_categories.items() %}
+        {% for fact in items[:4] %}
+        <tr>
+          <td>{{ fact.label or category }}</td>
+          <td>{{ fact.value }}</td>
+          <td>{{ fact.source_document or "-" }}</td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if vkm_map.get("items") %}
+    <h3>Hartëzimi me VKM 610</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Detyrimi</th>
+          <th>Baza</th>
+          <th>Statusi</th>
+          <th>Përdorimi në kolaudim</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in vkm_map.get("items", []) %}
+        <tr>
+          <td>{{ item.title }}</td>
+          <td>{{ item.law_reference }}</td>
+          <td class="status-{{ item.status }}">{{ item.status }}</td>
+          <td>{{ item.professional_use }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if consistency.get("issues") %}
+    <h3>Kontrollet e konsistencës</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Severiteti</th>
+          <th>Çështja</th>
+          <th>Përshkrimi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for issue in consistency.get("issues", []) %}
+        <tr>
+          <td>{{ issue.severity }}</td>
+          <td>{{ issue.title }}</td>
+          <td>{{ issue.description }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if kolaudim.get("sections") %}
+    <h3>Struktura e draft Akt Kolaudimit</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Seksioni</th>
+          <th>Statusi</th>
+          <th>Mungesa për plotësim</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for section in kolaudim.get("sections", []) %}
+        <tr>
+          <td>{{ section.title }}</td>
+          <td class="status-{{ section.status }}">{{ section.status }}</td>
+          <td>
+            {% set missing = section.get("missing_fact_categories", []) + section.get("weak_obligation_codes", []) %}
+            {{ missing | join(", ") if missing else "-" }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if kolaudim.get("human_review_questions") %}
+    <h3>Pyetje për verifikim njerëzor</h3>
+    <ul>
+      {% for question in kolaudim.get("human_review_questions", []) %}
+      <li>{{ question }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
 
     <h2>Tabela e gjetjeve</h2>
     {% if report.findings %}

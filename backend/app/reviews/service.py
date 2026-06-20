@@ -32,6 +32,7 @@ DEFAULT_LAW_SCOPE = ("VKM_610_2022",)
 SUPPORTED_OUTPUT_FORMATS = {"json", "pdf"}
 JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 PDF_CONTENT_TYPE = "application/pdf"
+AGENT_TEXT_EXCERPT_LIMIT = 6_000
 
 DOCUMENT_TYPE_ALIASES = {
     "foundation_completion_and_level_0_00_control_act": {"level_0_00_control_act"},
@@ -100,6 +101,7 @@ class CurrentFileSnapshot:
     parse_status: str
     document_type: str | None
     classification_confidence: float | None
+    text_content: str | None = None
 
     def as_evidence(self) -> dict[str, Any]:
         return {
@@ -481,6 +483,7 @@ async def _load_current_file_snapshots(
                 parse_status=file_version.parse_status,
                 document_type=parsed_document.document_type if parsed_document else None,
                 classification_confidence=_safe_float(classification.get("confidence")),
+                text_content=parsed_document.text_content if parsed_document else None,
             )
         )
     return snapshots
@@ -674,7 +677,15 @@ def _current_file_as_dict(current_file: CurrentFileSnapshot) -> dict[str, Any]:
         "parse_status": current_file.parse_status,
         "document_type": current_file.document_type,
         "classification_confidence": current_file.classification_confidence,
+        "text_excerpt": _text_excerpt(current_file.text_content),
     }
+
+
+def _text_excerpt(text: str | None) -> str:
+    if not text:
+        return ""
+    compact = "\n".join(line.rstrip() for line in text.splitlines() if line.strip())
+    return compact[:AGENT_TEXT_EXCERPT_LIMIT]
 
 
 def _rule_context_as_dict(context: RuleContext) -> dict[str, Any]:
@@ -723,6 +734,7 @@ def _build_audit_report(
     appendices.extend(_agent_appendices(agent_state))
 
     return AuditReport(
+        title=_report_title(job),
         generated_at=job.completed_at or datetime.now(timezone.utc),
         project=ReportProject(
             id=project.id,
@@ -734,8 +746,13 @@ def _build_audit_report(
         law_scope=law_scope,
         document_summary=document_summary,
         recommendation=_report_recommendation(structured_findings),
-        summary=_report_summary(document_summary, structured_findings),
+        summary=_report_summary(
+            document_summary,
+            structured_findings,
+            agent_state=agent_state,
+        ),
         findings=structured_findings,
+        professional_analysis=_professional_analysis(agent_state),
         required_actions=required_actions,
         appendices=appendices,
         agent_metadata=_agent_metadata(agent_state),
@@ -749,7 +766,7 @@ def _agent_appendices(agent_state: AuditGraphState | None) -> list[str]:
     trace = agent_state.get("agent_trace") or []
     appendices = [
         (
-            "Workflow LangGraph Phase 2 ekzekutoi kontrollin në nyjet: "
+            "Workflow-i profesional i kolaudimit ekzekutoi kontrollin në nyjet: "
             + " -> ".join(trace)
             + "."
         )
@@ -789,15 +806,55 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
     report = agent_state.get("report", {})
     ai_review = agent_state.get("ai_review", {})
     report_phase = report.get("phase") if isinstance(report, dict) else None
+    extracted_facts = agent_state.get("extracted_facts", {})
+    vkm_obligations = agent_state.get("vkm_obligation_map", {})
+    consistency_review = agent_state.get("consistency_review", {})
+    kolaudim_analysis = agent_state.get("kolaudim_analysis", {})
     return {
-        "phase": report_phase if isinstance(report_phase, str) else "langgraph_phase_2",
+        "phase": (
+            report_phase
+            if isinstance(report_phase, str)
+            else "professional_kolaudim_phase_1"
+        ),
         "trace": list(agent_state.get("agent_trace", [])),
         "needs_human_review": bool(agent_state.get("needs_human_review", False)),
         "document_inventory": dict(agent_state.get("document_inventory", {})),
         "law_context": dict(agent_state.get("law_context", {})),
         "completeness_summary": dict(agent_state.get("completeness_summary", {})),
+        "fact_summary": (
+            dict(extracted_facts.get("summary", {}))
+            if isinstance(extracted_facts, dict)
+            else {}
+        ),
+        "vkm_obligation_summary": (
+            dict(vkm_obligations.get("summary", {}))
+            if isinstance(vkm_obligations, dict)
+            else {}
+        ),
+        "consistency_summary": (
+            dict(consistency_review.get("summary", {}))
+            if isinstance(consistency_review, dict)
+            else {}
+        ),
+        "kolaudim_readiness": (
+            kolaudim_analysis.get("readiness")
+            if isinstance(kolaudim_analysis, dict)
+            else None
+        ),
         "ai_review": dict(ai_review) if isinstance(ai_review, dict) else {},
         "report": dict(report) if isinstance(report, dict) else {},
+    }
+
+
+def _professional_analysis(agent_state: AuditGraphState | None) -> dict[str, object]:
+    if not agent_state:
+        return {}
+
+    return {
+        "extracted_facts": dict(agent_state.get("extracted_facts", {})),
+        "vkm_obligation_map": dict(agent_state.get("vkm_obligation_map", {})),
+        "consistency_review": dict(agent_state.get("consistency_review", {})),
+        "kolaudim_analysis": dict(agent_state.get("kolaudim_analysis", {})),
     }
 
 
@@ -861,6 +918,9 @@ def _store_report_outputs(
                     "law_scope": report.law_scope,
                     "agent_phase": report.agent_metadata.get("phase"),
                     "agent_trace": report.agent_metadata.get("trace", []),
+                    "kolaudim_readiness": report.agent_metadata.get(
+                        "kolaudim_readiness"
+                    ),
                     "ai_review_status": (
                         report.agent_metadata.get("ai_review", {}).get("status")
                         if isinstance(report.agent_metadata.get("ai_review"), dict)
@@ -958,6 +1018,12 @@ def _unknown_filenames(current_files: list[CurrentFileSnapshot]) -> list[str]:
     ]
 
 
+def _report_title(job: ReviewJob) -> str:
+    if getattr(job, "job_type", None) == "kolaudim_act":
+        return "Draft Akt Kolaudimi Teknik"
+    return "Raport Auditimi Teknik"
+
+
 def _report_recommendation(findings: list[Any]) -> str:
     if not findings:
         return "Pa gjetje të rëndësishme"
@@ -969,19 +1035,34 @@ def _report_recommendation(findings: list[Any]) -> str:
 def _report_summary(
     document_summary: ReportDocumentSummary,
     findings: list[Any],
+    *,
+    agent_state: AuditGraphState | None = None,
 ) -> str:
+    professional_prefix = _professional_summary_prefix(agent_state)
     if not findings:
-        return (
+        return professional_prefix + (
             f"U kontrolluan {document_summary.total_files} dokumente. "
             "Nuk u identifikuan mungesa dokumentacioni nga rregullat e aplikuara."
         )
 
-    return (
+    return professional_prefix + (
         f"U kontrolluan {document_summary.total_files} dokumente, prej të cilave "
         f"{document_summary.classified_files} u klasifikuan. "
         f"Sistemi identifikoi {len(findings)} gjetje të hapura për plotësim "
         "dokumentacioni sipas rregullave të validuara."
     )
+
+
+def _professional_summary_prefix(agent_state: AuditGraphState | None) -> str:
+    if not agent_state:
+        return ""
+    kolaudim_analysis = agent_state.get("kolaudim_analysis", {})
+    if not isinstance(kolaudim_analysis, dict):
+        return ""
+    conclusion = str(kolaudim_analysis.get("professional_conclusion") or "").strip()
+    if not conclusion:
+        return ""
+    return conclusion + " "
 
 
 def _law_scope_codes(job: ReviewJob) -> list[str]:

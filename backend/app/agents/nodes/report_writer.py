@@ -6,6 +6,7 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
     inventory = state.get("document_inventory", {})
     findings = state.get("verified_findings", state.get("findings", []))
     ai_review = state.get("ai_review", {})
+    kolaudim_analysis = state.get("kolaudim_analysis", {})
     needs_human_review = bool(state.get("needs_human_review", False))
 
     total_documents = int(inventory.get("total_documents", 0) or 0)
@@ -31,7 +32,7 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
         recommendation = "Pa gjetje të rëndësishme"
 
     state["report"] = {
-        "phase": "langgraph_phase_2",
+        "phase": "professional_kolaudim_phase_1",
         "summary": summary,
         "recommendation": recommendation,
         "total_documents": total_documents,
@@ -39,6 +40,11 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
         "finding_count": finding_count,
         "verified_finding_count": len(state.get("verified_findings", [])),
         "ai_review_status": ai_review.get("status", "not_run"),
+        "professional_readiness": (
+            kolaudim_analysis.get("readiness")
+            if isinstance(kolaudim_analysis, dict)
+            else None
+        ),
         "needs_human_review": needs_human_review,
         "trace": list(state.get("agent_trace", [])),
     }

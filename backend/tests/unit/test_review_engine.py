@@ -1,6 +1,7 @@
 import uuid
 from types import SimpleNamespace
 
+from app.reports.renderer import render_audit_report_html
 from app.reviews.service import (
     CurrentFileSnapshot,
     RuleContext,
@@ -142,6 +143,7 @@ def test_audit_report_compacts_historical_files_checked_evidence() -> None:
     )
     job = SimpleNamespace(
         id=uuid.uuid4(),
+        job_type="kolaudim_act",
         completed_at=None,
         law_scope={"codes": ["VKM_610_2022"]},
     )
@@ -184,8 +186,26 @@ def test_audit_report_compacts_historical_files_checked_evidence() -> None:
         job=job,
         current_files=current_files,
         findings=[finding],
+        agent_state={
+            "extracted_facts": {"summary": {"fact_count": 1}},
+            "vkm_obligation_map": {"summary": {"complete": 1}},
+            "consistency_review": {"summary": {"issue_count": 0}},
+            "kolaudim_analysis": {
+                "readiness": "draft_with_reservations",
+                "professional_conclusion": "Draft me rezerva.",
+            },
+            "report": {"phase": "professional_kolaudim_phase_1"},
+        },
     )
 
+    assert report.title == "Draft Akt Kolaudimi Teknik"
+    assert report.summary.startswith("Draft me rezerva.")
+    assert report.professional_analysis["kolaudim_analysis"]["readiness"] == (
+        "draft_with_reservations"
+    )
+    html = render_audit_report_html(report)
+    assert "Analiza profesionale për kolaudim" in html
+    assert "Draft Akt Kolaudimi Teknik" in html
     assert report.project.name == "Godine banimi"
     assert report.document_summary.total_files == 2
     assert report.document_summary.classified_files == 1

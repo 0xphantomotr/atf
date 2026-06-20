@@ -62,14 +62,15 @@ def _build_review_input(state: AuditGraphState) -> dict:
 
     return {
         "review_scope": {
-            "phase": "langgraph_phase_2",
-            "allowed_action": "review_existing_deterministic_findings_only",
+            "phase": "professional_kolaudim_phase_1",
+            "allowed_action": "review_existing_findings_and_professional_analysis_only",
             "must_not_create_final_findings": True,
         },
         "project": state.get("project", {}),
         "job": state.get("job", {}),
         "document_inventory": state.get("document_inventory", {}),
         "law_context": state.get("law_context", {}),
+        "professional_analysis": _professional_review_context(state),
         "completeness_summary": state.get("completeness_summary", {}),
         "rules": _limit_dicts(state.get("rules", []), 30),
         "verified_findings": _limit_dicts(
@@ -80,6 +81,7 @@ def _build_review_input(state: AuditGraphState) -> dict:
         "unsupported_documents": _limit_dicts(unsupported_documents, 25),
         "instructions": [
             "Rishiko vetëm gjetjet deterministike të dhëna.",
+            "Rishiko edhe përmbledhjet e analizës profesionale pa krijuar fakte të reja.",
             "Mos shto gjetje përfundimtare të reja.",
             "Nëse një dokument i paklasifikuar mund të mbulojë një mungesë, kërko verifikim njerëzor.",
             "Arsyetimi duhet të jetë i shkurtër, teknik dhe në shqip.",
@@ -130,6 +132,35 @@ def _normalize_ai_review(review: dict) -> dict:
 
 def _limit_dicts(items: list[dict], limit: int) -> list[dict]:
     return [dict(item) for item in items[:limit] if isinstance(item, dict)]
+
+
+def _professional_review_context(state: AuditGraphState) -> dict:
+    extracted_facts = state.get("extracted_facts", {})
+    vkm_obligations = state.get("vkm_obligation_map", {})
+    consistency_review = state.get("consistency_review", {})
+    kolaudim_analysis = state.get("kolaudim_analysis", {})
+    return {
+        "fact_summary": (
+            dict(extracted_facts.get("summary", {}))
+            if isinstance(extracted_facts, dict)
+            else {}
+        ),
+        "vkm_obligation_summary": (
+            dict(vkm_obligations.get("summary", {}))
+            if isinstance(vkm_obligations, dict)
+            else {}
+        ),
+        "consistency_summary": (
+            dict(consistency_review.get("summary", {}))
+            if isinstance(consistency_review, dict)
+            else {}
+        ),
+        "kolaudim_readiness": (
+            kolaudim_analysis.get("readiness")
+            if isinstance(kolaudim_analysis, dict)
+            else None
+        ),
+    }
 
 
 def _safe_float(value: object) -> float | None:

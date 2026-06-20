@@ -2,12 +2,16 @@ import uuid
 from types import SimpleNamespace
 
 from app.agents.nodes.completeness_auditor import audit_completeness
+from app.agents.nodes.consistency_checker import check_professional_consistency
 from app.agents.nodes.document_classifier import classify_documents
 from app.agents.nodes.evidence_verifier import verify_evidence
+from app.agents.nodes.fact_extractor import extract_project_facts
+from app.agents.nodes.kolaudim_planner import plan_kolaudim_act
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.report_writer import write_report
 from app.agents.nodes.senior_reviewer import senior_review
+from app.agents.nodes.vkm_obligation_mapper import map_vkm_obligations
 from app.core.config import settings
 from app.reviews.service import (
     CurrentFileSnapshot,
@@ -31,10 +35,14 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
             {
                 "parse_status": "parsed",
                 "document_type": "start_works_notification",
+                "original_filename": "1.1 Njoftim Fillim Punimesh OK.docx",
+                "text_excerpt": "Objekti: Godine banimi 5 kate\nInvestitor: Test shpk",
             },
             {
                 "parse_status": "parsed",
                 "document_type": "unknown",
+                "original_filename": "draft.docx",
+                "text_excerpt": "Objekti: ??????",
             },
         ],
         "rules": [
@@ -56,9 +64,13 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
     for node in (
         load_project_context,
         classify_documents,
+        extract_project_facts,
         retrieve_laws,
+        map_vkm_obligations,
         audit_completeness,
         verify_evidence,
+        check_professional_consistency,
+        plan_kolaudim_act,
         senior_review,
         write_report,
     ):
@@ -67,9 +79,13 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
     assert state["agent_trace"] == [
         "project_context",
         "document_inventory",
+        "fact_extractor",
         "law_retriever",
+        "vkm_obligation_mapper",
         "deterministic_completeness",
         "evidence_verifier",
+        "consistency_checker",
+        "kolaudim_planner",
         "senior_reviewer",
         "report_writer",
     ]
@@ -77,11 +93,15 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
     assert state["document_inventory"]["classified_documents"] == 1
     assert state["document_inventory"]["unknown_documents"] == 1
     assert state["law_context"]["rule_count"] == 1
+    assert state["extracted_facts"]["summary"]["fact_count"] >= 1
+    assert state["vkm_obligation_map"]["summary"]["missing"] >= 1
+    assert state["consistency_review"]["summary"]["issue_count"] >= 1
+    assert state["kolaudim_analysis"]["target_output"] == "draft_akt_kolaudimi"
     assert state["findings"][0]["evidence_verified"]
     assert state["needs_human_review"]
     assert state["ai_review"]["status"] == "skipped"
     assert state["ai_review"]["reason"] == "missing_user_ai_settings"
-    assert state["report"]["phase"] == "langgraph_phase_2"
+    assert state["report"]["phase"] == "professional_kolaudim_phase_1"
     assert state["report"]["ai_review_status"] == "skipped"
     assert state["report"]["finding_count"] == 1
 
@@ -126,6 +146,7 @@ def test_build_agent_state_serializes_review_inputs() -> None:
         parse_status="parsed",
         document_type="start_works_notification",
         classification_confidence=0.98,
+        text_content="Objekti: Dosja Teknike\nInvestitor: Test shpk",
     )
     rule = SimpleNamespace(
         rule_code="VKM610-008-001",
@@ -161,6 +182,7 @@ def test_build_agent_state_serializes_review_inputs() -> None:
 
     assert state["project"]["id"] == str(project.id)
     assert state["documents"][0]["version_id"] == str(current_file.version_id)
+    assert state["documents"][0]["text_excerpt"].startswith("Objekti: Dosja Teknike")
     assert state["rules"][0]["law_reference"] == "VKM 610/2022, Neni 8"
     assert state["findings"][0]["evidence"]["missing_document_types"] == [
         "forty_five_day_report"
