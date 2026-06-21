@@ -5,8 +5,8 @@ from aiogram.types import BufferedInputFile, Message
 from app.db.session import AsyncSessionLocal
 from app.reviews import service as reviews_service
 from app.telegram.service import (
+    display_review_job_error,
     get_active_project,
-    get_latest_completed_review_job,
     get_latest_review_job,
     get_or_create_message_user,
 )
@@ -23,32 +23,36 @@ async def reports_command(message: Message) -> None:
             await message.answer("Nuk keni projekt aktiv.")
             return
 
-        completed_job = await get_latest_completed_review_job(
+        latest_job = await get_latest_review_job(
             session,
             user_id=user.id,
             project_id=project.id,
         )
-        if completed_job is None:
-            latest_job = await get_latest_review_job(
-                session,
-                user_id=user.id,
-                project_id=project.id,
+        if latest_job is None:
+            await message.answer(
+                "Nuk ka ende Akt Kolaudimi për projektin aktiv.\n\n"
+                "Niseni gjenerimin me /gjenero."
             )
-            if latest_job is not None:
-                await message.answer(
-                    "Draft Akt Kolaudimi nuk është ende gati.\n\n"
-                    f"Statusi aktual: {latest_job.status} ({latest_job.progress}%)."
-                )
-            else:
-                await message.answer(
-                    "Nuk ka ende Akt Kolaudimi për projektin aktiv.\n\n"
-                    "Niseni gjenerimin me /gjenero."
-                )
+            return
+
+        if latest_job.status == "failed":
+            await message.answer(
+                "Gjenerimi i fundit dështoi dhe nuk prodhoi Akt Kolaudimi.\n\n"
+                f"Gabim: {display_review_job_error(latest_job.error_message)}\n\n"
+                "Rregulloni konfigurimin dhe përdorni përsëri /gjenero."
+            )
+            return
+
+        if latest_job.status != "completed":
+            await message.answer(
+                "Akt Kolaudimi nuk është ende gati.\n\n"
+                f"Statusi aktual: {latest_job.status} ({latest_job.progress}%)."
+            )
             return
 
         _, outputs = await reviews_service.get_review_job_outputs(
             session,
-            job_id=completed_job.id,
+            job_id=latest_job.id,
             user_id=user.id,
         )
         pdf_output = next(
@@ -67,5 +71,5 @@ async def reports_command(message: Message) -> None:
 
     await message.answer_document(
         BufferedInputFile(download.content, filename=download.filename),
-        caption=f"Draft Akt Kolaudimi për projektin: {project.name}",
+        caption=f"Akt Kolaudimi për projektin: {project.name}",
     )

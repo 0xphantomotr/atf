@@ -32,7 +32,7 @@ DEFAULT_LAW_SCOPE = ("VKM_610_2022",)
 SUPPORTED_OUTPUT_FORMATS = {"json", "pdf"}
 JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 PDF_CONTENT_TYPE = "application/pdf"
-AGENT_TEXT_EXCERPT_LIMIT = 6_000
+AGENT_TEXT_EXCERPT_LIMIT = 20_000
 
 DOCUMENT_TYPE_ALIASES = {
     "foundation_completion_and_level_0_00_control_act": {"level_0_00_control_act"},
@@ -809,8 +809,10 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
     extracted_facts = agent_state.get("extracted_facts", {})
     vkm_obligations = agent_state.get("vkm_obligation_map", {})
     consistency_review = agent_state.get("consistency_review", {})
+    professional_dossier = agent_state.get("professional_dossier", {})
     kolaudim_analysis = agent_state.get("kolaudim_analysis", {})
     kolaudim_draft = agent_state.get("kolaudim_draft", {})
+    claim_verification = agent_state.get("claim_verification", {})
     return {
         "phase": (
             report_phase
@@ -837,6 +839,11 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
             if isinstance(consistency_review, dict)
             else {}
         ),
+        "professional_dossier_summary": (
+            dict(professional_dossier.get("summary", {}))
+            if isinstance(professional_dossier, dict)
+            else {}
+        ),
         "kolaudim_readiness": (
             kolaudim_analysis.get("readiness")
             if isinstance(kolaudim_analysis, dict)
@@ -844,6 +851,11 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
         ),
         "kolaudim_draft_status": (
             kolaudim_draft.get("status") if isinstance(kolaudim_draft, dict) else None
+        ),
+        "claim_verification": (
+            dict(claim_verification.get("summary", {}))
+            if isinstance(claim_verification, dict)
+            else {}
         ),
         "ai_review": dict(ai_review) if isinstance(ai_review, dict) else {},
         "report": dict(report) if isinstance(report, dict) else {},
@@ -855,11 +867,10 @@ def _professional_analysis(agent_state: AuditGraphState | None) -> dict[str, obj
         return {}
 
     return {
-        "extracted_facts": dict(agent_state.get("extracted_facts", {})),
-        "vkm_obligation_map": dict(agent_state.get("vkm_obligation_map", {})),
-        "consistency_review": dict(agent_state.get("consistency_review", {})),
+        "professional_dossier": dict(agent_state.get("professional_dossier", {})),
         "kolaudim_analysis": dict(agent_state.get("kolaudim_analysis", {})),
         "kolaudim_draft": dict(agent_state.get("kolaudim_draft", {})),
+        "claim_verification": dict(agent_state.get("claim_verification", {})),
     }
 
 
@@ -1017,7 +1028,7 @@ def _unknown_filenames(current_files: list[CurrentFileSnapshot]) -> list[str]:
 
 def _report_title(job: ReviewJob) -> str:
     if getattr(job, "job_type", None) == "kolaudim_act":
-        return "Draft Akt Kolaudimi Teknik"
+        return "Akt-Kolaudimi Tekniko-Ekonomik"
     return "Raport Auditimi Teknik"
 
 
@@ -1167,34 +1178,40 @@ def _json_output_bytes(job: ReviewJob, report: AuditReport) -> bytes:
 def _kolaudim_json_payload(report: AuditReport) -> dict[str, Any]:
     professional = report.professional_analysis or {}
     draft = professional.get("kolaudim_draft", {})
+    dossier = professional.get("professional_dossier", {})
     if not isinstance(draft, dict):
         draft = {}
+    if not isinstance(dossier, dict):
+        dossier = {}
+
+    public_sections = []
+    for section in draft.get("sections", []):
+        if not isinstance(section, dict):
+            continue
+        public_sections.append(
+            {
+                "code": section.get("code"),
+                "title": section.get("title"),
+                "body": section.get("body"),
+            }
+        )
 
     payload: dict[str, Any] = {
-        "title": (
-            draft.get("title")
-            if draft.get("status") == "drafted" and draft.get("title")
-            else report.title
-        ),
+        "title": report.title,
         "generated_at": report.generated_at.isoformat(),
-        "project": report.project.model_dump(mode="json"),
+        "project": {
+            field: fact.get("value")
+            for field, fact in dossier.get("canonical_facts", {}).items()
+            if isinstance(fact, dict) and fact.get("value")
+        },
         "law_scope": report.law_scope,
         "status": draft.get("status") or "not_generated",
         "executive_summary": draft.get("executive_summary") or report.summary,
-        "sections": draft.get("sections") if isinstance(draft.get("sections"), list) else [],
-        "reservations": (
-            draft.get("reservations") if isinstance(draft.get("reservations"), list) else []
-        ),
-        "human_completion_items": (
-            draft.get("human_completion_items")
-            if isinstance(draft.get("human_completion_items"), list)
-            else []
-        ),
+        "sections": public_sections,
         "signature_note": draft.get("signature_note") or "",
-        "confidence": draft.get("confidence"),
         "notice": (
-            "Draft profesional për Akt Kolaudimi. Akti final duhet verifikuar, "
-            "plotësuar dhe nënshkruar nga profesionistët përgjegjës."
+            "Projekt-akt profesional. Hyn në fuqi vetëm pas kontrollit, plotësimit "
+            "dhe nënshkrimit nga profesionistët përgjegjës."
         ),
     }
     if draft.get("status") != "drafted" and draft.get("reason"):

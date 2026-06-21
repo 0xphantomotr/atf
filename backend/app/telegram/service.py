@@ -121,6 +121,15 @@ async def get_latest_completed_review_job(
     return result.scalar_one_or_none()
 
 
+def display_review_job_error(error_message: str | None) -> str:
+    if error_message == "Stored secret could not be decrypted.":
+        return (
+            "API key i ruajtur nuk mund të lexohet me çelësin aktual të enkriptimit. "
+            "Ruajeni përsëri me /ai_key provider api_key."
+        )
+    return error_message or "Gabim i panjohur."
+
+
 async def _get_telegram_account_for_user(
     session: AsyncSession,
     *,

@@ -10,13 +10,9 @@ from app.agents.state import AuditGraphState
 from app.core.config import settings
 
 APPROX_CHARS_PER_TOKEN = 3
-MAX_FACTS_PER_CATEGORY_FOR_WRITER = 5
-MAX_CONSISTENCY_ISSUES_FOR_WRITER = 12
-MAX_FINDINGS_FOR_WRITER = 8
 BUDGET_METADATA_RESERVED_TOKENS = 250
 
 DOCUMENT_TYPE_PRIORITY = {
-    "kolaudim_act": 0,
     "construction_permit": 1,
     "development_permit": 1,
     "contract_and_related_acts": 2,
@@ -38,6 +34,7 @@ DOCUMENT_TYPE_PRIORITY = {
     "material_quality_certificate": 8,
     "maintenance_project": 9,
     "as_built_project": 9,
+    "kolaudim_act": 30,
 }
 
 RELEVANT_LINE_TERMS = (
@@ -113,6 +110,8 @@ def write_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
             ai_settings=ai_settings,
         )
     except LLMReviewError as exc:
+        if state.get("require_ai_review"):
+            raise
         state["kolaudim_draft"] = {
             "status": "failed",
             "reason": str(exc)[:500],
@@ -138,28 +137,24 @@ def _build_kolaudim_writer_input(
     ai_settings: dict[str, Any],
 ) -> dict[str, Any]:
     input_token_budget = kolaudim_draft_input_token_budget(ai_settings)
+    raw_dossier = state.get("professional_dossier", {})
+    dossier = _compact_professional_dossier(raw_dossier)
     writer_input: dict[str, Any] = {
-        "project": state.get("project", {}),
+        "project_fallback_metadata": state.get("project", {}),
         "job": state.get("job", {}),
-        "document_inventory": state.get("document_inventory", {}),
-        "extracted_facts": _compact_extracted_facts(state.get("extracted_facts", {})),
-        "vkm_obligation_map": _compact_vkm_obligation_map(
-            state.get("vkm_obligation_map", {})
-        ),
-        "verified_findings": _compact_findings(
-            state.get("verified_findings", state.get("findings", [])),
-        ),
-        "consistency_review": _compact_consistency_review(
-            state.get("consistency_review", {})
-        ),
-        "kolaudim_analysis": state.get("kolaudim_analysis", {}),
-        "senior_ai_review": _compact_ai_review(state.get("ai_review", {})),
+        "professional_dossier": dossier,
+        "legal_basis": _compact_legal_basis(state),
+        "section_blueprint": _section_blueprint(state.get("kolaudim_analysis", {})),
         "instructions": [
-            "Përgatit Draft Akt Kolaudimi, jo checklist.",
-            "Përdor vetëm faktet dhe evidencën në input.",
-            "Nëse mungon një fakt i zakonshëm i aktit njerëzor, vendose te human_completion_items.",
-            "Rezervat duhet të lidhen me gjetje, konsistencë ose dokumente të paklasifikuara.",
-            "Mos e shpall objektin të kolauduar përfundimisht; drafti kërkon rishikim/nënshkrim njerëzor.",
+            "Përgatit një Akt-Kolaudimi tekniko-ekonomik të plotë, jo raport auditimi dhe jo checklist.",
+            "Faktet kanonike kanë përparësi ndaj çdo formulimi tjetër në fragmentet e dokumenteve.",
+            "Dokumentet me evidence_role=style_reference përdoren vetëm për strukturë dhe stil, kurrë për fakte.",
+            "Dokumentet me evidence_role=foreign_project_reference i përkasin një objekti tjetër dhe nuk përdoren për asnjë fakt të këtij akti.",
+            "Përshkruaj faktet e provuara nga aktet, procesverbalet dhe dokumentet teknike pa pretenduar inspektim fizik të kryer nga sistemi.",
+            "Mos shfaq emra fushash, kode sistemi, status parse, confidence, workflow, gjetje apo lista dokumentesh që mungojnë.",
+            "Pasiguritë materiale integroji shkurt në konkluzion; mos krijo seksion checklist ose listë të gjatë rezervash.",
+            "Përdor 10 deri në 12 seksionet e blueprint-it, me narrativë të detajuar dhe pa përsëritje.",
+            "Titulli publik duhet të jetë 'AKT-KOLAUDIMI TEKNIKO-EKONOMIK'.",
         ],
     }
 
@@ -171,6 +166,13 @@ def _build_kolaudim_writer_input(
     writer_input["document_evidence"] = _document_evidence(
         state.get("documents", []),
         available_tokens=max(0, remaining_tokens),
+        document_roles={
+            str(record.get("filename")): str(record.get("role"))
+            for record in raw_dossier.get("document_records", [])
+            if isinstance(record, dict)
+        }
+        if isinstance(raw_dossier, dict)
+        else {},
     )
     return _fit_writer_input_to_budget(
         writer_input,
@@ -232,30 +234,20 @@ def _shrink_writer_input(writer_input: dict[str, Any]) -> bool:
         excerpt = str(largest.get("evidence_excerpt") or "")
         if len(excerpt) > 260:
             largest["evidence_excerpt"] = excerpt[: max(260, len(excerpt) // 2)]
+        elif excerpt:
+            largest["evidence_excerpt"] = ""
         else:
-            documents.pop()
+            documents.remove(largest)
         return True
 
-    vkm_map = writer_input.get("vkm_obligation_map")
-    if isinstance(vkm_map, dict) and _remove_last_list_item(vkm_map, "items", 12):
-        return True
-    consistency_review = writer_input.get("consistency_review")
-    if isinstance(consistency_review, dict) and _remove_last_list_item(
-        consistency_review,
-        "issues",
-        6,
-    ):
-        return True
-    if _remove_last_list_item(writer_input, "verified_findings", 4):
-        return True
-
-    facts = writer_input.get("extracted_facts")
-    categories = facts.get("categories") if isinstance(facts, dict) else None
-    if isinstance(categories, dict):
-        for items in categories.values():
-            if isinstance(items, list) and len(items) > 2:
-                items.pop()
-                return True
+    dossier = writer_input.get("professional_dossier")
+    if isinstance(dossier, dict):
+        if _remove_last_list_item(dossier, "technical_observations", 12):
+            return True
+        if _remove_last_list_item(dossier, "chronology", 8):
+            return True
+        if _remove_last_list_item(dossier, "conflicts", 3):
+            return True
 
     return False
 
@@ -272,163 +264,180 @@ def _remove_last_list_item(
     return False
 
 
-def _compact_extracted_facts(extracted_facts: object) -> dict[str, Any]:
-    if not isinstance(extracted_facts, dict):
+def _compact_professional_dossier(dossier: object) -> dict[str, Any]:
+    if not isinstance(dossier, dict):
         return {}
 
-    categories = extracted_facts.get("categories", {})
-    compact_categories: dict[str, list[dict[str, Any]]] = {}
-    if isinstance(categories, dict):
-        for category, items in categories.items():
-            if not isinstance(items, list):
+    canonical = dossier.get("canonical_facts", {})
+    compact_facts: dict[str, dict[str, Any]] = {}
+    if isinstance(canonical, dict):
+        for field, fact in canonical.items():
+            if not isinstance(fact, dict):
                 continue
-            compact_items = []
-            for item in items[:MAX_FACTS_PER_CATEGORY_FOR_WRITER]:
-                if not isinstance(item, dict):
-                    continue
-                compact_items.append(
+            compact_facts[str(field)] = {
+                "value": fact.get("value"),
+                "confidence_level": fact.get("confidence_level"),
+                "source_documents": _string_list(
+                    fact.get("source_documents"),
+                    limit=6,
+                ),
+                "evidence": [
                     {
-                        "label": item.get("label"),
-                        "value": _truncate(item.get("value"), 180),
                         "source_document": item.get("source_document"),
-                        "document_type": item.get("document_type"),
-                        "confidence": item.get("confidence"),
+                        "snippet": _truncate(item.get("snippet"), 220),
                     }
-                )
-            if compact_items:
-                compact_categories[str(category)] = compact_items
-
-    return {
-        "categories": compact_categories,
-        "summary": dict(extracted_facts.get("summary", {}))
-        if isinstance(extracted_facts.get("summary"), dict)
-        else {},
-        "limitations": _string_list(extracted_facts.get("limitations"), limit=4),
-    }
-
-
-def _compact_vkm_obligation_map(vkm_map: object) -> dict[str, Any]:
-    if not isinstance(vkm_map, dict):
-        return {}
-
-    compact_items = []
-    items = vkm_map.get("items", [])
-    if isinstance(items, list):
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            compact_items.append(
-                {
-                    "code": item.get("code"),
-                    "title": item.get("title"),
-                    "law_reference": item.get("law_reference"),
-                    "status": item.get("status"),
-                    "present_document_types": _string_list(
-                        item.get("present_document_types"),
-                        limit=10,
-                    ),
-                    "missing_document_types": _string_list(
-                        item.get("missing_document_types"),
-                        limit=12,
-                    ),
-                    "professional_use": _truncate(item.get("professional_use"), 180),
-                }
-            )
-
-    return {
-        "summary": dict(vkm_map.get("summary", {}))
-        if isinstance(vkm_map.get("summary"), dict)
-        else {},
-        "items": compact_items,
-    }
-
-
-def _compact_findings(findings: list[dict]) -> list[dict[str, Any]]:
-    compact_findings = []
-    for finding in findings[:MAX_FINDINGS_FOR_WRITER]:
-        if not isinstance(finding, dict):
-            continue
-        evidence = finding.get("evidence", {})
-        missing_document_types = []
-        if isinstance(evidence, dict):
-            missing_document_types = _string_list(
-                evidence.get("missing_document_types"),
-                limit=12,
-            )
-        compact_findings.append(
-            {
-                "severity": finding.get("severity"),
-                "title": finding.get("title"),
-                "law_reference": finding.get("law_reference"),
-                "rule_code": finding.get("rule_code"),
-                "missing_document_types": missing_document_types,
-                "required_action": _truncate(finding.get("required_action"), 220),
+                    for item in fact.get("evidence", [])[:2]
+                    if isinstance(item, dict)
+                ],
+                "alternatives": [
+                    {
+                        "value": item.get("value"),
+                        "source_documents": _string_list(
+                            item.get("source_documents"),
+                            limit=3,
+                        ),
+                    }
+                    for item in fact.get("alternatives", [])[:2]
+                    if isinstance(item, dict)
+                ],
             }
-        )
-    return compact_findings
-
-
-def _compact_consistency_review(consistency_review: object) -> dict[str, Any]:
-    if not isinstance(consistency_review, dict):
-        return {}
-
-    issues = consistency_review.get("issues", [])
-    compact_issues = []
-    if isinstance(issues, list):
-        for issue in issues[:MAX_CONSISTENCY_ISSUES_FOR_WRITER]:
-            if not isinstance(issue, dict):
-                continue
-            compact_issues.append(
-                {
-                    "code": issue.get("code"),
-                    "severity": issue.get("severity"),
-                    "title": issue.get("title"),
-                    "description": _truncate(issue.get("description"), 220),
-                    "source_document": issue.get("source_document"),
-                    "evidence": _compact_issue_evidence(issue.get("evidence")),
-                }
-            )
 
     return {
-        "status": consistency_review.get("status"),
-        "summary": dict(consistency_review.get("summary", {}))
-        if isinstance(consistency_review.get("summary"), dict)
+        "canonical_facts": compact_facts,
+        "chronology": _limit_dicts(dossier.get("chronology", []), 40),
+        "technical_observations": _limit_dicts(
+            dossier.get("technical_observations", []),
+            60,
+        ),
+        "conflicts": _limit_dicts(dossier.get("conflicts", []), 12),
+        "document_records": [
+            dict(record)
+            for record in dossier.get("document_records", [])
+            if isinstance(record, dict)
+            and record.get("role")
+            not in {"foreign_project_reference", "style_reference", "unreadable"}
+        ][:120],
+        "evidence_by_section": dict(dossier.get("evidence_by_section", {}))
+        if isinstance(dossier.get("evidence_by_section"), dict)
         else {},
-        "issues": compact_issues,
+        "excluded_reference_summary": {
+            "style_reference_count": len(dossier.get("style_references", [])),
+            "foreign_project_document_count": int(
+                dossier.get("summary", {}).get("foreign_project_documents") or 0
+            )
+            if isinstance(dossier.get("summary"), dict)
+            else 0,
+            "instruction": (
+                "Këto dokumente janë analizuar dhe përjashtuar nga burimet faktike; "
+                "struktura profesionale e lejuar është përfshirë në blueprint."
+            ),
+        },
+        "missing_core_fields": _string_list(
+            dossier.get("missing_core_fields"),
+            limit=20,
+        ),
+        "summary": dict(dossier.get("summary", {}))
+        if isinstance(dossier.get("summary"), dict)
+        else {},
     }
+
+
+def _compact_legal_basis(state: AuditGraphState) -> dict[str, Any]:
+    references = []
+    seen = set()
+    for rule in state.get("rules", []):
+        if not isinstance(rule, dict):
+            continue
+        reference = str(rule.get("law_reference") or "").strip()
+        if not reference or reference in seen:
+            continue
+        seen.add(reference)
+        references.append(reference)
+    return {
+        "law_scope": state.get("job", {}).get("law_scope", []),
+        "verified_references": references[:20],
+        "instruction": (
+            "Përdor vetëm referencat e dhëna. Mos shpik numra nenesh ose akte të tjera."
+        ),
+    }
+
+
+def _section_blueprint(analysis: object) -> list[dict[str, Any]]:
+    if not isinstance(analysis, dict):
+        return []
+    return _limit_dicts(analysis.get("sections", []), 16)
 
 
 def _document_evidence(
     documents: list[dict[str, Any]],
     *,
     available_tokens: int,
+    document_roles: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     if available_tokens < 250:
         return []
 
-    evidence = []
-    for document in _prioritized_documents(documents):
-        excerpt = _relevant_excerpt(
-            str(document.get("text_excerpt") or ""),
-            max_chars=_per_document_excerpt_chars(available_tokens),
-        )
-        candidate = {
+    document_roles = document_roles or {}
+    prioritized = [
+        document
+        for document in _prioritized_documents(documents)
+        if document_roles.get(str(document.get("original_filename")))
+        not in {"foreign_project_reference", "style_reference", "unreadable"}
+    ]
+    evidence = [
+        {
             "filename": document.get("original_filename"),
             "parse_status": document.get("parse_status"),
             "document_type": document.get("document_type"),
             "classification_confidence": document.get("classification_confidence"),
-            "evidence_excerpt": excerpt,
+            "evidence_role": document_roles.get(
+                str(document.get("original_filename")),
+                "supporting_evidence",
+            ),
+            "evidence_excerpt": "",
         }
-        if _estimate_tokens(evidence + [candidate]) <= available_tokens:
-            evidence.append(candidate)
-            continue
+        for document in prioritized
+    ]
+    while evidence and _estimate_tokens(evidence) > available_tokens:
+        evidence.pop()
+    if not evidence:
+        return []
 
-        small_candidate = dict(candidate)
-        small_candidate["evidence_excerpt"] = excerpt[:240]
-        if _estimate_tokens(evidence + [small_candidate]) <= available_tokens:
-            evidence.append(small_candidate)
+    included_names = {str(item.get("filename")) for item in evidence}
+    included_documents = [
+        document
+        for document in prioritized
+        if str(document.get("original_filename")) in included_names
+    ]
+    remaining_tokens = max(0, available_tokens - _estimate_tokens(evidence))
+    total_chars = remaining_tokens * APPROX_CHARS_PER_TOKEN
+    per_document_chars = _per_document_excerpt_chars(
+        available_tokens,
+        document_count=len(included_documents),
+        total_chars=total_chars,
+    )
+
+    evidence_by_name = {str(item.get("filename")): item for item in evidence}
+    for document in included_documents:
+        filename = str(document.get("original_filename"))
+        candidate = evidence_by_name[filename]
+        candidate["evidence_excerpt"] = _relevant_excerpt(
+            str(document.get("text_excerpt") or ""),
+            max_chars=per_document_chars,
+        )
+
+    while _estimate_tokens(evidence) > available_tokens:
+        largest = max(
+            evidence,
+            key=lambda item: len(str(item.get("evidence_excerpt") or "")),
+        )
+        excerpt = str(largest.get("evidence_excerpt") or "")
+        if not excerpt:
+            evidence.pop()
+        elif len(excerpt) > 240:
+            largest["evidence_excerpt"] = excerpt[: max(240, len(excerpt) - 240)]
         else:
-            break
+            largest["evidence_excerpt"] = ""
     return evidence
 
 
@@ -464,7 +473,7 @@ def _relevant_excerpt(text: str, *, max_chars: int) -> str:
         if len(line) < 8:
             continue
         normalized = line.lower()
-        if len(fallback_lines) < 5:
+        if len(fallback_lines) < 8:
             fallback_lines.append(line)
         if not any(term in normalized for term in RELEVANT_LINE_TERMS):
             continue
@@ -476,46 +485,27 @@ def _relevant_excerpt(text: str, *, max_chars: int) -> str:
         if len("\n".join(selected_lines)) >= max_chars:
             break
 
-    excerpt = "\n".join(selected_lines or fallback_lines)
+    excerpt_lines = fallback_lines + [
+        line for line in selected_lines if line not in fallback_lines
+    ]
+    excerpt = "\n".join(excerpt_lines)
     return excerpt[:max_chars]
 
 
-def _per_document_excerpt_chars(available_tokens: int) -> int:
+def _per_document_excerpt_chars(
+    available_tokens: int,
+    *,
+    document_count: int,
+    total_chars: int,
+) -> int:
+    if not document_count:
+        return 0
+    fair_share = max(240, total_chars // document_count)
     if available_tokens <= 2_000:
-        return 260
-    if available_tokens <= 4_500:
-        return 420
+        return min(320, fair_share)
     if available_tokens <= 9_000:
-        return 620
-    return 900
-
-
-def _compact_ai_review(ai_review: object) -> dict[str, Any]:
-    if not isinstance(ai_review, dict):
-        return {}
-    return {
-        "status": ai_review.get("status"),
-        "executive_summary": ai_review.get("executive_summary"),
-        "recommendation": ai_review.get("recommendation"),
-        "human_review_required": ai_review.get("human_review_required"),
-        "limitations": ai_review.get("limitations", []),
-    }
-
-
-def _compact_issue_evidence(evidence: object) -> list[str]:
-    if isinstance(evidence, list):
-        compact = []
-        for item in evidence[:4]:
-            if isinstance(item, dict):
-                value = item.get("value") or item.get("source_document")
-                if value:
-                    compact.append(_truncate(value, 160))
-            else:
-                compact.append(_truncate(item, 160))
-        return [item for item in compact if item]
-    if isinstance(evidence, str):
-        return [_truncate(evidence, 180)]
-    return []
+        return min(900, fair_share)
+    return min(4_500, fair_share)
 
 
 def _normalize_kolaudim_draft(draft: dict[str, Any]) -> dict[str, Any]:
@@ -538,7 +528,7 @@ def _normalize_kolaudim_draft(draft: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "status": "drafted",
-        "title": str(draft.get("title") or "Draft Akt Kolaudimi Teknik").strip(),
+        "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
         "executive_summary": str(draft.get("executive_summary") or "").strip(),
         "sections": normalized_sections,
         "reservations": _string_list(draft.get("reservations")),

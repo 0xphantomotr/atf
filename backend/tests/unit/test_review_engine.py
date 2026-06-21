@@ -219,13 +219,13 @@ def test_audit_report_compacts_historical_files_checked_evidence() -> None:
         },
     )
 
-    assert report.title == "Draft Akt Kolaudimi Teknik"
+    assert report.title == "Akt-Kolaudimi Tekniko-Ekonomik"
     assert report.summary.startswith("Ky është drafti narrativ.")
     assert report.professional_analysis["kolaudim_analysis"]["readiness"] == (
         "draft_with_reservations"
     )
     html = render_audit_report_html(report)
-    assert "Draft Akt Kolaudimi Teknik" in html
+    assert "Akt-Kolaudimi Tekniko-Ekonomik" in html
     assert "Drafti mbështetet në VKM 610/2022." in html
     assert "Për nënshkrim nga palët përgjegjëse." in html
     assert "Dokumentet e kontrolluara" not in html
@@ -266,12 +266,17 @@ def test_kolaudim_json_output_is_clean_act_payload() -> None:
         size_bytes=100,
     )
 
-    assert payload["title"] == "Draft Akt Kolaudimi Teknik"
+    assert payload["title"] == "Akt-Kolaudimi Tekniko-Ekonomik"
     assert payload["sections"][0]["title"] == "Baza ligjore"
     assert "document_summary" not in payload
     assert "findings" not in payload
     assert "required_actions" not in payload
     assert "agent_metadata" not in payload
+    assert "evidence_notes" not in payload["sections"][0]
+    assert "reservations" not in payload
+    assert "human_completion_items" not in payload
+    assert "verification" not in payload
+    assert "confidence" not in payload
     assert "finding_count" not in metadata
     assert "recommendation" not in metadata
     assert "agent_trace" not in metadata

@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any
 from urllib import error, request
 
@@ -18,18 +19,46 @@ MODEL_REQUEST_TOKEN_LIMITS: dict[tuple[str, str], int] = {
     ("openai", "gpt-4.1-mini"): 32_000,
     ("openai", "gpt-4.1"): 32_000,
     ("openai", "gpt-4o-mini"): 32_000,
-    ("gemini", "gemini-2.5-flash"): 32_000,
-    ("gemini", "gemini-2.0-flash"): 32_000,
-    ("gemini", "gemini-1.5-flash"): 32_000,
+    ("gemini", "gemini-2.5-flash"): 64_000,
+    ("gemini", "gemini-2.5-flash-lite"): 64_000,
+    ("gemini", "gemini-3-flash"): 64_000,
+    ("gemini", "gemini-3.1-flash-lite"): 64_000,
+    ("gemini", "gemini-3.5-flash"): 64_000,
+    ("gemini", "gemini-2.0-flash"): 64_000,
+    ("gemini", "gemini-1.5-flash"): 64_000,
 }
 
 PROVIDER_REQUEST_TOKEN_LIMITS = {
     "groq": 8_000,
     "openai": 32_000,
-    "gemini": 32_000,
+    "gemini": 64_000,
+}
+
+MODEL_OUTPUT_TOKEN_LIMITS: dict[tuple[str, str], int] = {
+    ("groq", "openai/gpt-oss-20b"): 1_800,
+    ("groq", "openai/gpt-oss-120b"): 1_800,
+    ("groq", "llama-3.3-70b-versatile"): 1_800,
+    ("groq", "llama-3.1-8b-instant"): 1_200,
+    ("openai", "gpt-4.1-mini"): 4_000,
+    ("openai", "gpt-4.1"): 6_000,
+    ("openai", "gpt-4o-mini"): 4_000,
+    ("gemini", "gemini-2.5-flash"): 12_000,
+    ("gemini", "gemini-2.5-flash-lite"): 10_000,
+    ("gemini", "gemini-3-flash"): 12_000,
+    ("gemini", "gemini-3.1-flash-lite"): 10_000,
+    ("gemini", "gemini-3.5-flash"): 12_000,
+}
+
+PROVIDER_OUTPUT_TOKEN_LIMITS = {
+    "groq": 1_800,
+    "openai": 4_000,
+    "gemini": 12_000,
 }
 
 KOLAUDIM_PROMPT_OVERHEAD_TOKENS = 1_400
+MIN_LONG_FORM_TIMEOUT_SECONDS = 90
+MAX_LONG_FORM_TIMEOUT_SECONDS = 300
+TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 SENIOR_REVIEW_SCHEMA: dict[str, Any] = {
@@ -156,10 +185,7 @@ def request_senior_review(
     }
     response_payload = _post_json("/chat/completions", body, ai_settings=ai_settings)
     text = _extract_chat_completion_content(response_payload)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise LLMReviewError("AI reviewer returned invalid JSON.") from exc
+    parsed = _parse_model_json_object(text, error_label="AI reviewer")
 
     if not isinstance(parsed, dict):
         raise LLMReviewError("AI reviewer returned a non-object JSON response.")
@@ -186,12 +212,18 @@ def request_kolaudim_draft(
         "temperature": 0,
         "max_tokens": max_output_tokens,
     }
-    response_payload = _post_json("/chat/completions", body, ai_settings=ai_settings)
+    response_payload = _post_json(
+        "/chat/completions",
+        body,
+        ai_settings=ai_settings,
+        timeout_seconds=kolaudim_request_timeout_seconds(
+            draft_input,
+            ai_settings=ai_settings,
+        ),
+        retry_transient=True,
+    )
     text = _extract_chat_completion_content(response_payload)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise LLMReviewError("AI kolaudim writer returned invalid JSON.") from exc
+    parsed = _parse_model_json_object(text, error_label="AI kolaudim writer")
 
     if not isinstance(parsed, dict):
         raise LLMReviewError("AI kolaudim writer returned a non-object JSON response.")
@@ -208,11 +240,44 @@ def model_request_token_limit(ai_settings: dict[str, Any]) -> int:
 
 
 def kolaudim_draft_max_output_tokens(ai_settings: dict[str, Any]) -> int:
+    provider = str(ai_settings.get("provider") or "").strip().lower()
     request_limit = model_request_token_limit(ai_settings)
     configured_limit = max(900, int(settings.openai_max_output_tokens or 1800))
+    output_limit = model_output_token_limit(ai_settings)
     if request_limit <= 9_000:
-        return min(configured_limit, 1_800, max(900, request_limit // 4))
-    return min(configured_limit, 4_000, max(1_600, request_limit // 5))
+        return min(configured_limit, output_limit, max(900, request_limit // 4))
+
+    provider_default = PROVIDER_OUTPUT_TOKEN_LIMITS.get(provider, 4_000)
+    target_output_tokens = max(configured_limit, provider_default)
+    return min(target_output_tokens, output_limit, max(1_600, request_limit // 5))
+
+
+def model_output_token_limit(ai_settings: dict[str, Any]) -> int:
+    provider = str(ai_settings.get("provider") or "").strip().lower()
+    model = str(ai_settings.get("model") or "").strip()
+    return MODEL_OUTPUT_TOKEN_LIMITS.get(
+        (provider, model),
+        PROVIDER_OUTPUT_TOKEN_LIMITS.get(provider, 4_000),
+    )
+
+
+def kolaudim_request_timeout_seconds(
+    draft_input: dict[str, Any],
+    *,
+    ai_settings: dict[str, Any],
+) -> int:
+    budget = draft_input.get("budget")
+    estimated_input_tokens = 0
+    if isinstance(budget, dict):
+        estimated_input_tokens = int(budget.get("estimated_input_tokens") or 0)
+
+    total_tokens = estimated_input_tokens + kolaudim_draft_max_output_tokens(ai_settings)
+    estimated_seconds = 60 + (total_tokens // 400)
+    return max(
+        int(settings.openai_timeout_seconds),
+        MIN_LONG_FORM_TIMEOUT_SECONDS,
+        min(MAX_LONG_FORM_TIMEOUT_SECONDS, estimated_seconds),
+    )
 
 
 def kolaudim_draft_input_token_budget(ai_settings: dict[str, Any]) -> int:
@@ -251,18 +316,18 @@ def _kolaudim_user_content(draft_input: dict[str, Any]) -> str:
     payload = {
         "required_output_shape": {
             "status": "drafted",
-            "title": "Draft Akt Kolaudimi Teknik",
+            "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
             "executive_summary": "string",
             "sections": [
                 {
-                    "code": "legal_basis | project_identity | document_verification | fact_verification | technical_economic_conclusion | reservations | signature_package",
+                    "code": "one code from draft_input.section_blueprint",
                     "title": "string",
-                    "body": "paragraphs in Albanian",
+                    "body": "detailed professional paragraphs in Albanian",
                     "evidence_notes": ["short evidence/source notes"],
                 }
             ],
-            "reservations": ["string"],
-            "human_completion_items": ["string"],
+            "reservations": ["only material technical qualifications; no document checklist"],
+            "human_completion_items": ["internal metadata only; never placeholders in public body"],
             "signature_note": "string",
             "confidence": "number between 0 and 1",
         },
@@ -285,7 +350,7 @@ def _schema_response_format(
     schema_name: str,
     schema: dict[str, Any],
 ) -> dict[str, Any]:
-    if ai_settings.get("provider") == "groq":
+    if ai_settings.get("provider") in {"gemini", "groq"}:
         return {"type": "json_object"}
 
     return {
@@ -298,11 +363,94 @@ def _schema_response_format(
     }
 
 
+def _parse_model_json_object(text: str, *, error_label: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = _loads_embedded_json_object(text)
+
+    if not isinstance(parsed, dict):
+        raise LLMReviewError(f"{error_label} returned a non-object JSON response.")
+    return parsed
+
+
+def _loads_embedded_json_object(text: str) -> dict[str, Any]:
+    clean_text = _strip_markdown_json_fence(text.strip())
+    try:
+        parsed = json.loads(clean_text)
+    except json.JSONDecodeError:
+        parsed = _loads_first_balanced_json_object(clean_text)
+
+    if not isinstance(parsed, dict):
+        raise LLMReviewError(
+            "AI model returned invalid JSON. "
+            f"Response preview: {_response_preview(text)}"
+        )
+    return parsed
+
+
+def _strip_markdown_json_fence(text: str) -> str:
+    if not text.startswith("```"):
+        return text
+
+    lines = text.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _loads_first_balanced_json_object(text: str) -> dict[str, Any]:
+    start = text.find("{")
+    if start < 0:
+        raise LLMReviewError(
+            "AI model returned invalid JSON. "
+            f"Response preview: {_response_preview(text)}"
+        )
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text[start:], start=start):
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\" and in_string:
+            escaped = True
+            continue
+        if character == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                parsed = json.loads(text[start : index + 1])
+                if not isinstance(parsed, dict):
+                    raise LLMReviewError("AI model returned a non-object JSON response.")
+                return parsed
+
+    raise LLMReviewError(
+        "AI model returned incomplete JSON. "
+        f"Response preview: {_response_preview(text)}"
+    )
+
+
+def _response_preview(text: str) -> str:
+    return " ".join(text.split())[:240]
+
+
 def _post_json(
     path: str,
     body: dict[str, Any],
     *,
     ai_settings: dict[str, Any],
+    timeout_seconds: int | None = None,
+    retry_transient: bool = False,
 ) -> dict[str, Any]:
     base_url = str(ai_settings["base_url"]).rstrip("/")
     api_request = request.Request(
@@ -317,21 +465,40 @@ def _post_json(
         method="POST",
     )
 
-    try:
-        with request.urlopen(  # nosec B310 - URL is configured API endpoint.
-            api_request,
-            timeout=settings.openai_timeout_seconds,
-        ) as response:
-            data = response.read().decode("utf-8")
-    except error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace")
-        provider_label = ai_settings.get("provider_label") or ai_settings.get("provider") or "AI"
-        raise LLMReviewError(
-            f"{provider_label} API request failed: {exc.code} {details[:500]}"
-        ) from exc
-    except error.URLError as exc:
-        provider_label = ai_settings.get("provider_label") or ai_settings.get("provider") or "AI"
-        raise LLMReviewError(f"{provider_label} API request failed: {exc.reason}") from exc
+    provider_label = ai_settings.get("provider_label") or ai_settings.get("provider") or "AI"
+    request_timeout = timeout_seconds or settings.openai_timeout_seconds
+    attempts = 3 if retry_transient else 1
+    data = ""
+    for attempt in range(attempts):
+        try:
+            with request.urlopen(  # nosec B310 - URL is configured API endpoint.
+                api_request,
+                timeout=request_timeout,
+            ) as response:
+                data = response.read().decode("utf-8")
+            break
+        except error.HTTPError as exc:
+            if exc.code in TRANSIENT_HTTP_STATUS_CODES and attempt + 1 < attempts:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    delay = max(2, min(10, int(retry_after or 0)))
+                except ValueError:
+                    delay = 2
+                time.sleep(delay)
+                continue
+            details = exc.read().decode("utf-8", errors="replace")
+            raise LLMReviewError(
+                f"{provider_label} API request failed: {exc.code} {details[:500]}"
+            ) from exc
+        except (TimeoutError, error.URLError) as exc:
+            if attempt + 1 < attempts:
+                time.sleep(2)
+                continue
+            reason = exc.reason if isinstance(exc, error.URLError) else str(exc)
+            raise LLMReviewError(
+                f"{provider_label} API request timed out after "
+                f"{request_timeout} seconds: {reason or 'read timeout'}"
+            ) from exc
 
     try:
         parsed = json.loads(data)

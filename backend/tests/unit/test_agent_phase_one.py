@@ -2,6 +2,7 @@ import uuid
 from types import SimpleNamespace
 
 from app.agents.nodes.completeness_auditor import audit_completeness
+from app.agents.nodes.claim_verifier import verify_kolaudim_claims
 from app.agents.nodes.consistency_checker import check_professional_consistency
 from app.agents.nodes.document_classifier import classify_documents
 from app.agents.nodes.evidence_verifier import verify_evidence
@@ -14,6 +15,7 @@ from app.agents.nodes.kolaudim_writer import (
 )
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
+from app.agents.nodes.professional_dossier import build_professional_dossier
 from app.agents.nodes.report_writer import write_report
 from app.agents.nodes.senior_reviewer import senior_review
 from app.agents.nodes.vkm_obligation_mapper import map_vkm_obligations
@@ -74,6 +76,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         load_project_context,
         classify_documents,
         extract_project_facts,
+        build_professional_dossier,
         retrieve_laws,
         map_vkm_obligations,
         audit_completeness,
@@ -82,6 +85,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         plan_kolaudim_act,
         senior_review,
         write_kolaudim_draft,
+        verify_kolaudim_claims,
         write_report,
     ):
         state = node(state)
@@ -90,6 +94,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         "project_context",
         "document_inventory",
         "fact_extractor",
+        "professional_dossier",
         "law_retriever",
         "vkm_obligation_mapper",
         "deterministic_completeness",
@@ -98,6 +103,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         "kolaudim_planner",
         "senior_reviewer",
         "kolaudim_writer",
+        "claim_verifier",
         "report_writer",
     ]
     assert state["document_inventory"]["total_documents"] == 2
@@ -107,14 +113,20 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
     assert state["extracted_facts"]["summary"]["fact_count"] >= 1
     assert state["vkm_obligation_map"]["summary"]["missing"] >= 1
     assert state["consistency_review"]["summary"]["issue_count"] >= 1
-    assert state["kolaudim_analysis"]["target_output"] == "draft_akt_kolaudimi"
+    assert state["professional_dossier"]["summary"]["documents_received"] == 2
+    assert state["kolaudim_analysis"]["target_output"] == "professional_akt_kolaudimi"
+    assert (
+        state["kolaudim_analysis"]["generation_mode"]
+        == "always_generate_with_evidence_qualification"
+    )
     assert state["findings"][0]["evidence_verified"]
     assert state["needs_human_review"]
     assert state["ai_review"]["status"] == "skipped"
     assert state["ai_review"]["reason"] == "missing_user_ai_settings"
     assert state["kolaudim_draft"]["status"] == "skipped"
     assert state["kolaudim_draft"]["reason"] == "missing_user_ai_settings"
-    assert state["report"]["phase"] == "professional_kolaudim_phase_1"
+    assert state["claim_verification"]["status"] == "skipped"
+    assert state["report"]["phase"] == "professional_kolaudim_dossier"
     assert state["report"]["kolaudim_draft_status"] == "skipped"
     assert state["report"]["ai_review_status"] == "skipped"
     assert state["report"]["finding_count"] == 1
@@ -282,3 +294,268 @@ def test_kolaudim_writer_input_respects_model_budget() -> None:
         len(document["evidence_excerpt"]) <= 900
         for document in writer_input["document_evidence"]
     )
+
+
+def test_professional_dossier_resolves_authoritative_facts_and_excludes_template() -> None:
+    state = {
+        "agent_trace": [],
+        "documents": [
+            {
+                "original_filename": "0. Kontrate Kolaudatorin.docx",
+                "parse_status": "parsed",
+                "document_type": "contract_and_related_acts",
+                "classification_confidence": 0.98,
+                "text_excerpt": (
+                    "Për objektin: “Ndërtesë banimi 1 kat me podrum”, me adrese "
+                    "Fshati Ngraçan, Bashkia Mallakaster, me Leje Ndërtimi Nr.01, "
+                    "Nr. 263/4 Prot., datë 07.03.2023.\n"
+                    "Investitori: z. Mitat Shanaj, me NID E50715088S.\n"
+                    "Kolaudatori: Ing. Beqir Ademi, me nr. Liç. MK.0215/1."
+                ),
+            },
+            {
+                "original_filename": "X.Akt Kolaudimi.docx",
+                "parse_status": "parsed",
+                "document_type": "kolaudim_act",
+                "classification_confidence": 0.99,
+                "text_excerpt": (
+                    "Objekti: Objekt bujqësor i pasaktë\n"
+                    "Investitori: z. Person Template\n"
+                    "Kolaudatori: ??????"
+                ),
+            },
+            {
+                "original_filename": "Njoftim fillim punimesh.docx",
+                "parse_status": "parsed",
+                "document_type": "start_works_notification",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Punimet filluan me datë 20/03/2023.",
+            },
+            {
+                "original_filename": "Procesverbal perfundimi.docx",
+                "parse_status": "parsed",
+                "document_type": "completion_minutes",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Punimet përfunduan me datë 06.03.2025.",
+            },
+        ],
+    }
+
+    dossier = build_professional_dossier(state)["professional_dossier"]
+    facts = dossier["canonical_facts"]
+
+    assert facts["object_name"]["value"] == "Ndërtesë banimi 1 kat me podrum"
+    assert facts["investor"]["value"] == "z. Mitat Shanaj"
+    assert facts["kolaudator"]["value"] == "Ing. Beqir Ademi"
+    assert facts["kolaudator_license"]["value"] == "MK-0215/1"
+    assert facts["construction_permit_number"]["value"] == "Nr. 01"
+    assert facts["construction_permit_protocol"]["value"] == "Nr. Prot. 263/4"
+    assert facts["start_date"]["value"] == "20.03.2023"
+    assert facts["completion_date"]["value"] == "06.03.2025"
+    assert "Person Template" not in str(facts)
+    assert dossier["summary"]["style_reference_documents"] == 1
+    assert len(dossier["chronology"]) == 2
+
+
+def test_professional_dossier_rejects_narrative_as_designer_identity() -> None:
+    state = {
+        "agent_trace": [],
+        "documents": [
+            {
+                "original_filename": "Deklarate konformiteti.docx",
+                "parse_status": "parsed",
+                "document_type": "construction_permit_conformity_declaration",
+                "classification_confidence": 0.98,
+                "text_excerpt": (
+                    "Zërat e punimeve janë realizuar sipas preventivit të miratuar "
+                    "dhe ndryshimeve të miratuara nga projektuesi, investitori dhe "
+                    "organet përkatëse."
+                ),
+            },
+            {
+                "original_filename": "Njoftim perfundimi.docx",
+                "parse_status": "parsed",
+                "document_type": "start_works_notification",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Projektuesi: 6D – PLAN me Lic Nr. N6760/11",
+            },
+            {
+                "original_filename": "Njoftim faze.docx",
+                "parse_status": "parsed",
+                "document_type": "start_works_notification",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Vlera e objektit: 3,434,985 Lek me TVSH",
+            },
+        ],
+    }
+
+    extract_project_facts(state)
+    dossier = build_professional_dossier(state)["professional_dossier"]
+
+    assert dossier["canonical_facts"]["designer"]["value"] == "6D – PLAN"
+    assert dossier["canonical_facts"]["planned_value"]["value"] == "3.434.985 lekë"
+    assert "realizuar" not in str(dossier["canonical_facts"]["designer"])
+
+
+def test_writer_input_contains_professional_dossier_without_audit_payload() -> None:
+    documents = [
+        {
+            "original_filename": f"doc-{index}.docx",
+            "parse_status": "parsed",
+            "document_type": "hidden_works_minutes",
+            "classification_confidence": 0.9,
+            "text_excerpt": "Procesverbal për punime të maskuara. " * 100,
+        }
+        for index in range(12)
+    ]
+    state = {
+        "project": {"name": "Dosja Teknike"},
+        "job": {"job_type": "kolaudim_act", "law_scope": ["VKM_610_2022"]},
+        "documents": documents,
+        "professional_dossier": {
+            "canonical_facts": {
+                "object_name": {
+                    "value": "Ndërtesë banimi",
+                    "confidence_level": "high",
+                    "source_documents": ["doc-0.docx"],
+                    "evidence": [],
+                    "alternatives": [],
+                }
+            },
+            "document_records": [
+                {
+                    "filename": f"doc-{index}.docx",
+                    "role": "authoritative_evidence",
+                }
+                for index in range(12)
+            ],
+            "chronology": [],
+            "technical_observations": [],
+            "conflicts": [],
+            "evidence_by_section": {},
+            "style_references": [],
+            "missing_core_fields": [],
+            "summary": {},
+        },
+        "kolaudim_analysis": {"sections": []},
+        "rules": [],
+        "verified_findings": [{"title": "Nuk duhet të hyjë në shkrues"}],
+        "consistency_review": {"issues": [{"title": "Nuk duhet të hyjë"}]},
+    }
+    ai_settings = {
+        "provider": "gemini",
+        "model": "gemini-2.5-flash",
+        "api_key": "test",
+    }
+
+    writer_input = _build_kolaudim_writer_input(state, ai_settings=ai_settings)
+
+    assert "professional_dossier" in writer_input
+    assert "verified_findings" not in writer_input
+    assert "consistency_review" not in writer_input
+    assert "vkm_obligation_map" not in writer_input
+    assert len(writer_input["document_evidence"]) == len(documents)
+
+
+def test_writer_excludes_foreign_and_style_reference_text() -> None:
+    state = {
+        "project": {"name": "Dosja Teknike"},
+        "job": {"job_type": "kolaudim_act", "law_scope": ["VKM_610_2022"]},
+        "documents": [
+            {
+                "original_filename": "target.docx",
+                "parse_status": "parsed",
+                "document_type": "control_act",
+                "classification_confidence": 0.9,
+                "text_excerpt": "Objekti: Ndërtesë banimi",
+            },
+            {
+                "original_filename": "foreign.docx",
+                "parse_status": "parsed",
+                "document_type": "contract_and_related_acts",
+                "classification_confidence": 0.9,
+                "text_excerpt": "Person dhe objekt i huaj",
+            },
+            {
+                "original_filename": "example.docx",
+                "parse_status": "parsed",
+                "document_type": "kolaudim_act",
+                "classification_confidence": 0.9,
+                "text_excerpt": "Akt shembull me fakte të huaja",
+            },
+        ],
+        "professional_dossier": {
+            "canonical_facts": {},
+            "document_records": [
+                {"filename": "target.docx", "role": "authoritative_evidence"},
+                {"filename": "foreign.docx", "role": "foreign_project_reference"},
+                {"filename": "example.docx", "role": "style_reference"},
+            ],
+            "chronology": [],
+            "technical_observations": [],
+            "conflicts": [],
+            "evidence_by_section": {},
+            "style_references": [{"filename": "example.docx"}],
+            "missing_core_fields": [],
+            "summary": {"foreign_project_documents": 1},
+        },
+        "kolaudim_analysis": {"sections": []},
+        "rules": [],
+    }
+
+    writer_input = _build_kolaudim_writer_input(
+        state,
+        ai_settings={
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "api_key": "test",
+        },
+    )
+
+    assert [item["filename"] for item in writer_input["document_evidence"]] == [
+        "target.docx"
+    ]
+    compact_records = writer_input["professional_dossier"]["document_records"]
+    assert [item["filename"] for item in compact_records] == ["target.docx"]
+    assert "example.docx" not in str(writer_input)
+
+
+def test_claim_verifier_accepts_clean_human_style_act() -> None:
+    state = {
+        "agent_trace": [],
+        "professional_dossier": {
+            "canonical_facts": {
+                "object_name": {"value": "Ndërtesë banimi"},
+                "location": {"value": "Fshati Ngraçan, Bashkia Mallakastër"},
+                "investor": {"value": "Mitat Shanaj"},
+                "contractor": {"value": "EB-2000 shpk"},
+                "supervisor": {"value": "Alisha Kerpi"},
+                "kolaudator": {"value": "Beqir Ademi"},
+            },
+            "conflicts": [],
+        },
+        "kolaudim_draft": {
+            "status": "drafted",
+            "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
+            "executive_summary": (
+                "Për Ndërtesë banimi në Fshati Ngraçan, Bashkia Mallakastër, "
+                "me investitor Mitat Shanaj."
+            ),
+            "sections": [
+                {
+                    "title": f"Seksioni {index}",
+                    "body": (
+                        "Zbatues EB-2000 shpk, mbikëqyrës Alisha Kerpi dhe "
+                        "kolaudator Beqir Ademi."
+                    ),
+                }
+                for index in range(8)
+            ],
+            "signature_note": "Akti nënshkruhet nga palët përgjegjëse.",
+        },
+    }
+
+    verified = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert verified["status"] == "verified"
+    assert verified["summary"]["publishable"] is True

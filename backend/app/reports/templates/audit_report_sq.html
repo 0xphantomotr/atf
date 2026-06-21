@@ -4,178 +4,218 @@
     <meta charset="utf-8">
     <title>{{ report.title }}</title>
     <style>
+      @page {
+        size: A4;
+        margin: 22mm 19mm 20mm;
+        @bottom-center {
+          content: "Faqe " counter(page) " nga " counter(pages);
+          color: #5d6773;
+          font-size: 9px;
+        }
+      }
       body {
         color: #17202a;
         font-family: "DejaVu Sans", Arial, sans-serif;
-        font-size: 12px;
-        line-height: 1.55;
+        font-size: 11.5px;
+        line-height: 1.58;
       }
-      h1, h2, h3 {
+      h1, h2 {
         color: #102030;
       }
       h1 {
         border-bottom: 2px solid #102030;
-        padding-bottom: 8px;
+        font-size: 22px;
+        letter-spacing: 0;
+        margin: 0 0 18px;
+        padding-bottom: 10px;
+        text-align: center;
         text-transform: uppercase;
       }
       h2 {
         border-bottom: 1px solid #c7cdd4;
-        margin-top: 22px;
+        break-after: avoid;
+        font-size: 15px;
+        margin: 22px 0 8px;
         padding-bottom: 4px;
+        text-transform: uppercase;
+      }
+      p {
+        margin: 7px 0;
+        text-align: justify;
       }
       table {
         border-collapse: collapse;
-        margin-top: 10px;
+        margin: 12px 0 18px;
         width: 100%;
       }
       th, td {
-        border: 1px solid #c7cdd4;
-        padding: 6px;
+        border: 1px solid #bfc7d0;
+        padding: 7px;
         text-align: left;
         vertical-align: top;
       }
       th {
         background: #eef2f6;
-        width: 28%;
+        width: 27%;
       }
-      ul {
-        margin-top: 8px;
-        padding-left: 18px;
-      }
-      .muted {
+      .document-date {
         color: #5d6773;
+        margin-bottom: 18px;
+        text-align: right;
       }
-      .signature-grid {
-        display: grid;
-        gap: 20px;
-        grid-template-columns: repeat(2, 1fr);
-        margin-top: 22px;
+      .lead {
+        font-size: 12px;
+        margin: 14px 0 18px;
       }
-      .signature-box {
+      .signature-table {
+        border-collapse: separate;
+        border-spacing: 18px 30px;
+        margin: 24px -18px 0;
+      }
+      .signature-table td {
+        border: 0;
         border-top: 1px solid #17202a;
-        padding-top: 6px;
-        min-height: 42px;
+        padding: 6px 0 0;
+        text-align: center;
+        width: 50%;
       }
-      .notice {
+      .signature-name {
+        display: block;
+        font-weight: 700;
+        margin-top: 4px;
+      }
+      .footer-note {
+        border-top: 1px solid #c7cdd4;
+        color: #5d6773;
+        font-size: 9px;
+        margin-top: 28px;
+        padding-top: 7px;
+        text-align: center;
+      }
+      .generation-failure {
         border: 1px solid #c7cdd4;
-        margin-top: 18px;
-        padding: 10px;
+        margin-top: 20px;
+        padding: 12px;
       }
     </style>
   </head>
   <body>
     {% set professional = report.professional_analysis %}
     {% set draft = professional.get("kolaudim_draft", {}) if professional else {} %}
-    {% set is_kolaudim = report.title == "Draft Akt Kolaudimi Teknik" %}
-
-    <h1>{{ draft.get("title") if draft.get("status") == "drafted" else report.title }}</h1>
-    <p class="muted">Gjeneruar më: {{ report.generated_at.strftime("%Y-%m-%d %H:%M") }}</p>
+    {% set dossier = professional.get("professional_dossier", {}) if professional else {} %}
+    {% set facts = dossier.get("canonical_facts", {}) if dossier else {} %}
+    {% set is_kolaudim = report.title == "Akt-Kolaudimi Tekniko-Ekonomik" %}
 
     {% if is_kolaudim %}
-    <h2>Të dhënat e projektit</h2>
+    <h1>{{ report.title }}</h1>
+    <p class="document-date">
+      Hartuar më {{ report.generated_at.strftime("%d.%m.%Y") }}
+    </p>
+
     <table>
       <tbody>
         <tr>
-          <th>Projekti</th>
-          <td>{{ report.project.name }}</td>
-        </tr>
-        <tr>
-          <th>Tipi</th>
-          <td>{{ report.project.project_type }}</td>
-        </tr>
-        <tr>
-          <th>Faza</th>
-          <td>{{ report.project.stage }}</td>
+          <th>Emërtimi i objektit</th>
+          <td>{{ facts.get("object_name", {}).get("value") or report.project.name }}</td>
         </tr>
         <tr>
           <th>Vendndodhja</th>
-          <td>{{ report.project.location or "Për plotësim/verifikim njerëzor" }}</td>
+          <td>{{ facts.get("location", {}).get("value") or report.project.location or "E papërcaktuar në dosje" }}</td>
         </tr>
         <tr>
-          <th>Baza ligjore</th>
-          <td>{{ report.law_scope | join(", ") }}</td>
+          <th>Zhvilluesi / Investitori</th>
+          <td>{{ facts.get("investor", {}).get("value") or "Nuk rezulton i provuar në dosje" }}</td>
+        </tr>
+        <tr>
+          <th>Zbatuesi</th>
+          <td>{{ facts.get("contractor", {}).get("value") or "Nuk rezulton i provuar në dosje" }}</td>
+        </tr>
+        <tr>
+          <th>Mbikëqyrësi</th>
+          <td>
+            {{ facts.get("supervisor", {}).get("value") or "Nuk rezulton i provuar në dosje" }}
+            {% if facts.get("supervisor_license", {}).get("value") %}
+            — Lic. {{ facts.get("supervisor_license", {}).get("value") }}
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Kolaudatori</th>
+          <td>
+            {{ facts.get("kolaudator", {}).get("value") or "Nuk rezulton i provuar në dosje" }}
+            {% if facts.get("kolaudator_license", {}).get("value") %}
+            — Lic. {{ facts.get("kolaudator_license", {}).get("value") }}
+            {% endif %}
+          </td>
         </tr>
       </tbody>
     </table>
 
     {% if draft.get("status") == "drafted" %}
-    {% if draft.get("executive_summary") %}
-    <h2>Përmbledhje</h2>
-    <p>{{ draft.get("executive_summary") }}</p>
-    {% endif %}
+      {% if draft.get("executive_summary") %}
+      <p class="lead">{{ draft.get("executive_summary") }}</p>
+      {% endif %}
 
-    {% for section in draft.get("sections", []) %}
-    <h2>{{ section.title }}</h2>
-    {% for paragraph in section.body.split("\n") %}
-    {% if paragraph.strip() %}
-    <p>{{ paragraph }}</p>
-    {% endif %}
-    {% endfor %}
-    {% if section.get("evidence_notes") %}
-    <p><strong>Evidencë e përdorur:</strong></p>
-    <ul>
-      {% for note in section.get("evidence_notes", []) %}
-      <li>{{ note }}</li>
+      {% for section in draft.get("sections", []) %}
+      <h2>{{ section.title }}</h2>
+        {% for paragraph in section.body.split("\n") %}
+          {% if paragraph.strip() %}
+          <p>{{ paragraph }}</p>
+          {% endif %}
+        {% endfor %}
       {% endfor %}
-    </ul>
-    {% endif %}
-    {% endfor %}
 
-    {% if draft.get("reservations") %}
-    <h2>Rezerva</h2>
-    <ul>
-      {% for reservation in draft.get("reservations", []) %}
-      <li>{{ reservation }}</li>
-      {% endfor %}
-    </ul>
-    {% endif %}
+      <h2>Nënshkrimet</h2>
+      {% if draft.get("signature_note") %}
+      <p>{{ draft.get("signature_note") }}</p>
+      {% endif %}
+      <table class="signature-table">
+        <tbody>
+          <tr>
+            <td>
+              Investitori / Zhvilluesi
+              <span class="signature-name">{{ facts.get("investor", {}).get("value") or "" }}</span>
+            </td>
+            <td>
+              Zbatuesi i punimeve
+              <span class="signature-name">{{ facts.get("contractor", {}).get("value") or "" }}</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              Mbikëqyrësi i punimeve
+              <span class="signature-name">{{ facts.get("supervisor", {}).get("value") or "" }}</span>
+            </td>
+            <td>
+              Kolaudatori i punimeve
+              <span class="signature-name">{{ facts.get("kolaudator", {}).get("value") or "" }}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
 
-    {% if draft.get("human_completion_items") %}
-    <h2>Për plotësim/verifikim njerëzor</h2>
-    <ul>
-      {% for item in draft.get("human_completion_items", []) %}
-      <li>{{ item }}</li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-
-    <h2>Paketa e nënshkrimit</h2>
-    {% if draft.get("signature_note") %}
-    <p>{{ draft.get("signature_note") }}</p>
-    {% endif %}
-    <div class="signature-grid">
-      <div class="signature-box">Investitori / Zhvilluesi</div>
-      <div class="signature-box">Sipërmarrësi</div>
-      <div class="signature-box">Mbikëqyrësi</div>
-      <div class="signature-box">Kolaudatori</div>
-    </div>
-
-    <div class="notice">
-      Ky dokument është draft profesional i gjeneruar nga sistemi mbi bazën e
-      dosjes së ngarkuar. Akti final duhet verifikuar, plotësuar dhe nënshkruar
-      nga profesionistët përgjegjës.
-    </div>
+      <p class="footer-note">
+        Projekt-akt i hartuar nga dokumentacioni i dosjes teknike; hyn në fuqi vetëm
+        pas kontrollit profesional, plotësimit të të dhënave përfundimtare dhe nënshkrimit
+        nga personat përgjegjës.
+      </p>
     {% else %}
-    <h2>Draft Akt Kolaudimi nuk u gjenerua</h2>
-    <p>
-      Drafti narrativ AI nuk u përfundua. Provoni përsëri me model/provider me
-      limit më të lartë ose pas pak minutash.
-    </p>
-    {% if draft.get("reason") %}
-    <p class="muted">Arsye teknike: {{ draft.get("reason") }}</p>
-    {% endif %}
+      <div class="generation-failure">
+        Akti nuk u gjenerua. {{ draft.get("reason") or "Shërbimi i modelit nuk dha rezultat të vlefshëm." }}
+      </div>
     {% endif %}
     {% else %}
-    <h2>Përmbledhje</h2>
-    <p>{{ report.summary }}</p>
-    {% if report.findings %}
-    <h2>Gjetje</h2>
-    <ul>
-      {% for finding in report.findings %}
-      <li>{{ finding.title }}</li>
-      {% endfor %}
-    </ul>
-    {% endif %}
+      <h1>{{ report.title }}</h1>
+      <h2>Përmbledhje</h2>
+      <p>{{ report.summary }}</p>
+      {% if report.findings %}
+      <h2>Gjetje</h2>
+      <ul>
+        {% for finding in report.findings %}
+        <li>{{ finding.title }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
     {% endif %}
   </body>
 </html>

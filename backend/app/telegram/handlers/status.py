@@ -5,6 +5,7 @@ from aiogram.types import Message
 from app.db.session import AsyncSessionLocal
 from app.reviews import service as reviews_service
 from app.telegram.service import (
+    display_review_job_error,
     get_active_project,
     get_latest_review_job,
     get_or_create_message_user,
@@ -52,7 +53,7 @@ async def status_command(message: Message) -> None:
         lines.append(f"Çështje për verifikim: {findings_count}")
         lines.append("Draft Akt Kolaudimin mund ta merrni me /raportet.")
     elif job.status == "failed":
-        lines.append(f"Gabim: {job.error_message or 'i panjohur'}")
+        lines.append(f"Gabim: {display_review_job_error(job.error_message)}")
     else:
         lines.append("Kontrolloni përsëri pas pak.")
 

@@ -9,12 +9,19 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
     kolaudim_analysis = state.get("kolaudim_analysis", {})
     kolaudim_draft = state.get("kolaudim_draft", {})
     needs_human_review = bool(state.get("needs_human_review", False))
+    is_kolaudim = state.get("job", {}).get("job_type") == "kolaudim_act"
 
     total_documents = int(inventory.get("total_documents", 0) or 0)
     classified_documents = int(inventory.get("classified_documents", 0) or 0)
     finding_count = len(findings)
 
-    if finding_count:
+    if is_kolaudim and isinstance(kolaudim_draft, dict) and kolaudim_draft.get("status") == "drafted":
+        summary = str(kolaudim_draft.get("executive_summary") or "").strip()
+        recommendation = "Projekt-akt i gatshëm për kontroll dhe nënshkrim profesional"
+    elif is_kolaudim:
+        summary = "Akt-Kolaudimi nuk u gjenerua."
+        recommendation = "Kërkohet rigjenerim"
+    elif finding_count:
         summary = (
             f"Workflow-i LangGraph kontrolloi {total_documents} dokumente dhe "
             f"verifikoi {finding_count} gjetje me evidencë të strukturuar."
@@ -25,7 +32,9 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
             "gjeti mungesa nga rregullat e aplikuara."
         )
 
-    if needs_human_review:
+    if is_kolaudim:
+        pass
+    elif needs_human_review:
         recommendation = "Kërkohet verifikim njerëzor"
     elif finding_count:
         recommendation = "Kërkohet plotësim dokumentacioni"
@@ -33,7 +42,7 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
         recommendation = "Pa gjetje të rëndësishme"
 
     state["report"] = {
-        "phase": "professional_kolaudim_phase_1",
+        "phase": "professional_kolaudim_dossier",
         "summary": summary,
         "recommendation": recommendation,
         "total_documents": total_documents,
