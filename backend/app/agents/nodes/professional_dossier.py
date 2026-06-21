@@ -243,6 +243,23 @@ CORE_FIELDS = (
 )
 PROJECT_ANCHOR_FIELDS = ("object_name", "location", "investor", "contractor")
 
+ANALYSIS_FIELD_ALIASES = {
+    "project_name": "object_name",
+    "project_title": "object_name",
+    "object": "object_name",
+    "object_location": "location",
+    "project_location": "location",
+    "developer": "investor",
+    "builder": "contractor",
+    "construction_company": "contractor",
+    "permit_number": "construction_permit_number",
+    "permit_date": "construction_permit_date",
+    "construction_start_date": "start_date",
+    "works_start_date": "start_date",
+    "construction_completion_date": "completion_date",
+    "works_completion_date": "completion_date",
+}
+
 
 def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
     state.setdefault("agent_trace", []).append("professional_dossier")
@@ -268,6 +285,12 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
                 }
             )
 
+    persisted_claim_count = _add_persisted_analysis_candidates(
+        state.get("document_analyses", []),
+        state.get("documents", []),
+        candidates,
+        document_records,
+    )
     _add_legacy_fact_candidates(state.get("extracted_facts", {}), candidates, document_records)
     initial_facts, _ = _resolve_canonical_facts(candidates)
     project_relations = _assign_project_relations(
@@ -319,6 +342,8 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
                 if record.get("project_relation") == "foreign_project_reference"
             ),
             "canonical_fact_count": len(canonical_facts),
+            "persisted_analysis_count": len(state.get("document_analyses", [])),
+            "persisted_claim_candidate_count": persisted_claim_count,
             "conflict_count": len(conflicts),
             "chronology_event_count": len(chronology),
             "missing_core_field_count": len(missing_core_fields),
@@ -837,6 +862,91 @@ def _add_legacy_fact_candidates(
             )
 
 
+def _add_persisted_analysis_candidates(
+    analyses: object,
+    documents: object,
+    candidates: dict[str, list[dict[str, Any]]],
+    document_records: list[dict[str, Any]],
+) -> int:
+    if not isinstance(analyses, list) or not isinstance(documents, list):
+        return 0
+    documents_by_version = {
+        str(document.get("version_id") or ""): document
+        for document in documents
+        if isinstance(document, dict) and document.get("version_id")
+    }
+    records_by_filename = {
+        str(record.get("filename") or ""): record for record in document_records
+    }
+    added = 0
+
+    for analysis in analyses:
+        if not isinstance(analysis, dict):
+            continue
+        document = documents_by_version.get(str(analysis.get("file_version_id") or ""))
+        if not isinstance(document, dict):
+            continue
+        filename = str(document.get("original_filename") or "")
+        record = records_by_filename.get(filename)
+        if record is None or record.get("role") in {"style_reference", "unreadable"}:
+            continue
+        claims = analysis.get("claims")
+        if not isinstance(claims, list):
+            continue
+
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            verified_evidence = [
+                item
+                for item in claim.get("evidence", [])
+                if isinstance(item, dict) and item.get("excerpt_verified") is True
+            ]
+            if not verified_evidence:
+                continue
+            raw_field = str(claim.get("field_name") or "").strip().lower()
+            field = ANALYSIS_FIELD_ALIASES.get(raw_field, raw_field)
+            value = str(claim.get("original_value") or "").strip()
+            if not field or not value or PLACEHOLDER_PATTERN.search(value):
+                continue
+            value = " ".join(value.split()).strip(" ;,.")
+            if len(value) < 2 or len(value) > 280:
+                continue
+            if any(
+                item.get("source_document") == filename
+                and _normalize_fact_value(field, str(item.get("value") or ""))
+                == _normalize_fact_value(field, value)
+                for item in candidates[field]
+            ):
+                continue
+
+            evidence = verified_evidence[0]
+            snippet = str(evidence.get("supporting_excerpt") or value)
+            candidates[field].append(
+                {
+                    "value": value,
+                    "source_document": filename,
+                    "document_type": document.get("document_type") or "unknown",
+                    "authority": float(record.get("authority_score") or 0.45),
+                    "classification_confidence": _safe_float(
+                        document.get("classification_confidence")
+                    )
+                    or 0.55,
+                    "extraction_confidence": _safe_float(claim.get("confidence")) or 0.5,
+                    "evidence": snippet[:300],
+                    "source_chunk_id": evidence.get("chunk_id"),
+                    "source_chunk_index": evidence.get("chunk_index"),
+                    "analysis_run_id": analysis.get("analysis_run_id"),
+                    "style_reference": False,
+                }
+            )
+            if field not in record["extracted_fields"]:
+                record["extracted_fields"].append(field)
+                record["extracted_fields"].sort()
+            added += 1
+    return added
+
+
 def _resolve_canonical_facts(
     candidates: dict[str, list[dict[str, Any]]],
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
@@ -1014,6 +1124,9 @@ def _rank_group(field: str, items: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "source_document": item.get("source_document"),
                 "snippet": str(item.get("evidence") or "")[:260],
+                "analysis_run_id": item.get("analysis_run_id"),
+                "source_chunk_id": item.get("source_chunk_id"),
+                "source_chunk_index": item.get("source_chunk_index"),
             }
             for item in sorted(
                 items,

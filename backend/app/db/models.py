@@ -1,5 +1,10 @@
 from app.ai.models import UserAISetting
 from app.audit_log.models import AuditLog
+from app.document_analysis.models import (
+    DocumentAnalysisBatch,
+    DocumentAnalysisClaim,
+    DocumentAnalysisRun,
+)
 from app.files.models import DocumentChunk, FileVersion, ParsedDocument, ProjectFile
 from app.laws.models import LawArticle, LawChunk, LawDocument
 from app.notifications.models import Notification
@@ -10,6 +15,9 @@ from app.users.models import TelegramAccount, User
 
 __all__ = [
     "AuditLog",
+    "DocumentAnalysisBatch",
+    "DocumentAnalysisClaim",
+    "DocumentAnalysisRun",
     "DocumentChunk",
     "FileVersion",
     "GeneratedOutput",

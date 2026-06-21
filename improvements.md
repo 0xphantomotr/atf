@@ -55,7 +55,7 @@ Current progress:
 - [x] Chunk replacement and uniqueness constraints implemented.
 - [ ] Existing parsed documents backfilled with chunks.
 - [ ] XLSX, legacy DOC and MPP ingestion implemented.
-- [ ] Persistent per-document AI analysis implemented.
+- [x] Persistent per-document AI analysis implemented.
 
 ## 4. Complete Document Ingestion
 

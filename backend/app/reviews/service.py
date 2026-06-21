@@ -14,6 +14,10 @@ from app.ai import service as ai_service
 from app.agents.graph import run_audit_graph
 from app.agents.state import AuditGraphState
 from app.core.config import settings
+from app.document_analysis.service import (
+    analysis_run_payloads,
+    ensure_project_document_analyses,
+)
 from app.files.classifier import UNKNOWN_DOCUMENT_TYPE, classify_document
 from app.files.models import FileVersion, ParsedDocument, ProjectFile
 from app.laws.models import LawArticle, LawDocument
@@ -227,6 +231,22 @@ async def run_queued_review_job(
                 "Nuk u gjetën rregulla të validuara për fushën ligjore të kërkuar."
             )
 
+        document_analyses: list[dict[str, Any]] = []
+        if _job_requires_ai_review(job) and ai_settings is not None:
+            job.progress = 15
+            analysis_runs = await ensure_project_document_analyses(
+                session,
+                project_id=project.id,
+                requested_by=job.requested_by,
+                ai_settings=ai_settings,
+            )
+            document_analyses = await analysis_run_payloads(session, runs=analysis_runs)
+            job.progress = 50
+            current_files = await _load_current_file_snapshots(
+                session,
+                project_id=project.id,
+            )
+
         await _clear_review_job_results(session, job_id=job.id)
         findings = _build_missing_document_findings(
             job=job,
@@ -244,6 +264,7 @@ async def run_queued_review_job(
             current_files=current_files,
             rule_contexts=rule_contexts,
             findings=findings,
+            document_analyses=document_analyses,
             ai_settings=ai_settings,
             require_ai_review=_job_requires_ai_review(job),
         )
@@ -617,6 +638,7 @@ def _run_phase_one_audit_graph(
     current_files: list[CurrentFileSnapshot],
     rule_contexts: list[RuleContext],
     findings: list[ReviewFinding],
+    document_analyses: list[dict[str, Any]] | None = None,
     ai_settings: dict[str, Any] | None,
     require_ai_review: bool,
 ) -> AuditGraphState:
@@ -627,6 +649,7 @@ def _run_phase_one_audit_graph(
             current_files=current_files,
             rule_contexts=rule_contexts,
             findings=findings,
+            document_analyses=document_analyses,
             ai_settings=ai_settings,
             require_ai_review=require_ai_review,
         )
@@ -640,6 +663,7 @@ def _build_agent_state(
     current_files: list[CurrentFileSnapshot],
     rule_contexts: list[RuleContext],
     findings: list[ReviewFinding],
+    document_analyses: list[dict[str, Any]] | None = None,
     ai_settings: dict[str, Any] | None = None,
     require_ai_review: bool = True,
 ) -> AuditGraphState:
@@ -660,6 +684,7 @@ def _build_agent_state(
         },
         "user_prompt": job.user_prompt or "",
         "documents": [_current_file_as_dict(current_file) for current_file in current_files],
+        "document_analyses": document_analyses or [],
         "rules": [_rule_context_as_dict(context) for context in rule_contexts],
         "findings": [_structured_finding(finding) for finding in findings],
         "ai_settings": ai_settings or {},

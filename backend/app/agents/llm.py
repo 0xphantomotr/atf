@@ -3,7 +3,11 @@ import time
 from typing import Any
 from urllib import error, request
 
-from app.agents.prompts import KOLAUDIM_WRITER_SYSTEM_PROMPT, SENIOR_REVIEW_SYSTEM_PROMPT
+from app.agents.prompts import (
+    DOCUMENT_ANALYSIS_SYSTEM_PROMPT,
+    KOLAUDIM_WRITER_SYSTEM_PROMPT,
+    SENIOR_REVIEW_SYSTEM_PROMPT,
+)
 from app.core.config import settings
 
 
@@ -59,6 +63,55 @@ KOLAUDIM_PROMPT_OVERHEAD_TOKENS = 1_400
 MIN_LONG_FORM_TIMEOUT_SECONDS = 90
 MAX_LONG_FORM_TIMEOUT_SECONDS = 300
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+DOCUMENT_ANALYSIS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "status",
+        "document_summary",
+        "document_purpose",
+        "authoritative_role",
+        "claims",
+        "limitations",
+    ],
+    "properties": {
+        "status": {"type": "string", "enum": ["analyzed"]},
+        "document_summary": {"type": "string"},
+        "document_purpose": {"type": "string"},
+        "authoritative_role": {"type": "string"},
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "category",
+                    "field_name",
+                    "original_value",
+                    "normalized_value",
+                    "confidence",
+                    "source_chunk_indexes",
+                    "supporting_excerpt",
+                ],
+                "properties": {
+                    "category": {"type": "string"},
+                    "field_name": {"type": "string"},
+                    "original_value": {"type": "string"},
+                    "normalized_value": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "source_chunk_indexes": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "supporting_excerpt": {"type": "string"},
+                },
+            },
+        },
+        "limitations": {"type": "array", "items": {"type": "string"}},
+    },
+}
 
 
 SENIOR_REVIEW_SCHEMA: dict[str, Any] = {
@@ -192,6 +245,37 @@ def request_senior_review(
     return parsed
 
 
+def request_document_analysis(
+    analysis_input: dict[str, Any],
+    *,
+    ai_settings: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    body = {
+        "model": ai_settings["model"],
+        "messages": [
+            {"role": "system", "content": DOCUMENT_ANALYSIS_SYSTEM_PROMPT},
+            {"role": "user", "content": _document_analysis_user_content(analysis_input)},
+        ],
+        "response_format": _schema_response_format(
+            ai_settings,
+            schema_name="atf_document_analysis",
+            schema=DOCUMENT_ANALYSIS_SCHEMA,
+        ),
+        "temperature": 0,
+        "max_tokens": document_analysis_max_output_tokens(ai_settings),
+    }
+    response_payload = _post_json(
+        "/chat/completions",
+        body,
+        ai_settings=ai_settings,
+        timeout_seconds=max(int(settings.openai_timeout_seconds), 90),
+        retry_transient=True,
+    )
+    text = _extract_chat_completion_content(response_payload)
+    parsed = _parse_model_json_object(text, error_label="AI document analyzer")
+    return parsed, _extract_token_usage(response_payload)
+
+
 def request_kolaudim_draft(
     draft_input: dict[str, Any],
     *,
@@ -237,6 +321,10 @@ def model_request_token_limit(ai_settings: dict[str, Any]) -> int:
         (provider, model),
         PROVIDER_REQUEST_TOKEN_LIMITS.get(provider, 16_000),
     )
+
+
+def document_analysis_max_output_tokens(ai_settings: dict[str, Any]) -> int:
+    return min(model_output_token_limit(ai_settings), 4_000)
 
 
 def kolaudim_draft_max_output_tokens(ai_settings: dict[str, Any]) -> int:
@@ -308,6 +396,35 @@ def _review_user_content(review_input: dict[str, Any]) -> str:
             "limitations": ["string"],
         },
         "audit_input": review_input,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _document_analysis_user_content(analysis_input: dict[str, Any]) -> str:
+    payload = {
+        "required_output_shape": {
+            "status": "analyzed",
+            "document_summary": "concise summary of only these chunks",
+            "document_purpose": "purpose evidenced by these chunks",
+            "authoritative_role": "primary evidence | supporting evidence | reference | unknown",
+            "claims": [
+                {
+                    "category": (
+                        "identity | party | permit | property | chronology | contract | "
+                        "economic | technical | work_phase | control_act | material | "
+                        "test | declaration | reservation | conclusion | other"
+                    ),
+                    "field_name": "stable snake_case field name",
+                    "original_value": "value exactly as stated",
+                    "normalized_value": "normalized value or empty string",
+                    "confidence": "number between 0 and 1",
+                    "source_chunk_indexes": ["integer indexes from analysis_input.chunks"],
+                    "supporting_excerpt": "short exact supporting excerpt",
+                }
+            ],
+            "limitations": ["limitations specific to these chunks"],
+        },
+        "analysis_input": analysis_input,
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -527,3 +644,16 @@ def _extract_chat_completion_content(payload: dict[str, Any]) -> str:
     if not isinstance(content, str) or not content.strip():
         raise LLMReviewError("OpenAI API response message content is empty.")
     return content
+
+
+def _extract_token_usage(payload: dict[str, Any]) -> dict[str, int]:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+
+    normalized: dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int) and value >= 0:
+            normalized[key] = value
+    return normalized

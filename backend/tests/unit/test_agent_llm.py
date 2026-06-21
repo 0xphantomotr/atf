@@ -12,6 +12,7 @@ from app.agents.llm import (
     model_output_token_limit,
     model_request_token_limit,
     request_kolaudim_draft,
+    request_document_analysis,
     request_senior_review,
 )
 
@@ -143,6 +144,62 @@ def test_request_senior_review_adds_output_shape_to_prompt(monkeypatch) -> None:
     assert "required_output_shape" in user_payload
     assert user_payload["audit_input"]["project"]["name"] == "Test"
     assert review["status"] == "reviewed"
+
+
+def test_request_document_analysis_uses_structured_chunk_prompt(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post_json(path, body, *, ai_settings, **kwargs):
+        captured["path"] = path
+        captured["body"] = body
+        captured["kwargs"] = kwargs
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "status": "analyzed",
+                                "document_summary": "Përmbledhje.",
+                                "document_purpose": "Leje ndërtimi.",
+                                "authoritative_role": "primary evidence",
+                                "claims": [],
+                                "limitations": [],
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            },
+        }
+
+    monkeypatch.setattr("app.agents.llm._post_json", fake_post_json)
+
+    analysis, usage = request_document_analysis(
+        {
+            "document": {"filename": "leje.pdf"},
+            "chunks": [{"chunk_index": 0, "text": "Leja nr. 123"}],
+        },
+        ai_settings={
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "base_url": "https://example.invalid/v1beta/openai",
+            "api_key": "test",
+        },
+    )
+
+    user_payload = json.loads(captured["body"]["messages"][1]["content"])
+    assert captured["path"] == "/chat/completions"
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert captured["body"]["max_tokens"] == 4_000
+    assert captured["kwargs"]["retry_transient"] is True
+    assert user_payload["analysis_input"]["chunks"][0]["chunk_index"] == 0
+    assert analysis["status"] == "analyzed"
+    assert usage["total_tokens"] == 120
 
 
 def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None:

@@ -357,6 +357,66 @@ def test_professional_dossier_resolves_authoritative_facts_and_excludes_template
     assert len(dossier["chronology"]) == 2
 
 
+def test_professional_dossier_uses_verified_persisted_analysis_claims() -> None:
+    version_id = uuid.uuid4()
+    state = {
+        "documents": [
+            {
+                "version_id": str(version_id),
+                "original_filename": "leje-ndertimi.pdf",
+                "parse_status": "parsed",
+                "document_type": "construction_permit",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Leje ndërtimi për objekt banimi.",
+            }
+        ],
+        "document_analyses": [
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "file_version_id": str(version_id),
+                "claims": [
+                    {
+                        "field_name": "investor",
+                        "original_value": "Shoqëria Test sh.p.k.",
+                        "normalized_value": "Shoqeria Test shpk",
+                        "confidence": 0.96,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 2,
+                                "supporting_excerpt": "Investitori: Shoqëria Test sh.p.k.",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    },
+                    {
+                        "field_name": "contractor",
+                        "original_value": "Nuk duhet përdorur",
+                        "confidence": 0.9,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 3,
+                                "supporting_excerpt": "Nuk duhet përdorur",
+                                "excerpt_verified": False,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        "extracted_facts": {},
+        "agent_trace": [],
+    }
+
+    dossier = build_professional_dossier(state)["professional_dossier"]
+
+    assert dossier["canonical_facts"]["investor"]["value"] == "Shoqëria Test sh.p.k"
+    assert "contractor" not in dossier["canonical_facts"]
+    assert dossier["summary"]["persisted_analysis_count"] == 1
+    assert dossier["summary"]["persisted_claim_candidate_count"] == 1
+
+
 def test_professional_dossier_rejects_narrative_as_designer_identity() -> None:
     state = {
         "agent_trace": [],
