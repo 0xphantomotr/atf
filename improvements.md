@@ -47,6 +47,16 @@ Before changing the architecture:
    report-selection changes as one checkpoint.
 4. Keep `.env`, API keys and local reference documents outside version control.
 
+Current progress:
+
+- [x] Professional Akt baseline committed and pushed.
+- [x] PDF page chunks implemented.
+- [x] DOCX paragraph and table chunks implemented.
+- [x] Chunk replacement and uniqueness constraints implemented.
+- [ ] Existing parsed documents backfilled with chunks.
+- [ ] XLSX, legacy DOC and MPP ingestion implemented.
+- [ ] Persistent per-document AI analysis implemented.
+
 ## 4. Complete Document Ingestion
 
 Every imported file must end in one explicit state:

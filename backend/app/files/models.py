@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -39,8 +39,13 @@ class FileVersion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
 class ParsedDocument(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "parsed_documents"
+    __table_args__ = (
+        UniqueConstraint("file_version_id", name="uq_parsed_documents_file_version_id"),
+    )
 
-    file_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("file_versions.id"), nullable=False)
+    file_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("file_versions.id"), nullable=False
+    )
     document_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     language: Mapped[str] = mapped_column(String(16), default="sq-AL", nullable=False)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -50,11 +55,20 @@ class ParsedDocument(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
 class DocumentChunk(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "file_version_id",
+            "chunk_index",
+            name="uq_document_chunks_file_version_chunk_index",
+        ),
+    )
 
     parsed_document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("parsed_documents.id"), nullable=False
     )
-    file_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("file_versions.id"), nullable=False)
+    file_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("file_versions.id"), nullable=False
+    )
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id"), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -62,4 +76,3 @@ class DocumentChunk(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(), nullable=True)
     chunk_metadata: Mapped[dict] = mapped_column("metadata", JSONB, default=dict, nullable=False)
-
