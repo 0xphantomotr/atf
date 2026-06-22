@@ -9,6 +9,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         "fact_fields": ("object_name", "location"),
         "evidence_sections": ("legal_and_administrative",),
         "registers": ("permits_property_licenses",),
+        "specialists": ("legal_administrative",),
     },
     {
         "code": "project_identity_and_parties",
@@ -25,6 +26,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         ),
         "evidence_sections": ("parties_and_contracts",),
         "registers": ("stakeholders",),
+        "specialists": ("legal_administrative",),
     },
     {
         "code": "permits_property_and_approved_design",
@@ -39,6 +41,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         ),
         "evidence_sections": ("legal_and_administrative", "design_and_parameters"),
         "registers": ("permits_property_licenses", "project_parameters"),
+        "specialists": ("legal_administrative", "project_parameters"),
     },
     {
         "code": "technical_parameters",
@@ -53,6 +56,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         ),
         "evidence_sections": ("design_and_parameters",),
         "registers": ("project_parameters",),
+        "specialists": ("project_parameters",),
     },
     {
         "code": "geology_seismicity_and_setting_out",
@@ -60,6 +64,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         "fact_fields": ("soil_bearing_capacity", "seismic_intensity"),
         "evidence_sections": ("design_and_parameters", "execution_and_chronology"),
         "registers": ("project_parameters", "technical_works"),
+        "specialists": ("project_parameters", "structural_hidden_works"),
     },
     {
         "code": "contracts_values_and_deadlines",
@@ -72,6 +77,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         ),
         "evidence_sections": ("parties_and_contracts", "technical_economic"),
         "registers": ("contracts_and_economics", "stakeholders"),
+        "specialists": ("contractual_economic", "chronology_completion"),
     },
     {
         "code": "execution_chronology",
@@ -79,6 +85,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         "fact_fields": ("start_date", "completion_date"),
         "evidence_sections": ("execution_and_chronology",),
         "registers": ("construction_chronology",),
+        "specialists": ("chronology_completion",),
     },
     {
         "code": "hidden_works_and_structure",
@@ -86,6 +93,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         "fact_fields": (),
         "evidence_sections": ("quality_and_hidden_works", "execution_and_chronology"),
         "registers": ("technical_works",),
+        "specialists": ("structural_hidden_works",),
     },
     {
         "code": "materials_tests_and_quality",
@@ -93,6 +101,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         "fact_fields": (),
         "evidence_sections": ("quality_and_hidden_works",),
         "registers": ("materials_and_tests",),
+        "specialists": ("materials_quality",),
     },
     {
         "code": "measurements_and_conformity",
@@ -104,6 +113,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         ),
         "evidence_sections": ("design_and_parameters", "completion_and_conclusion"),
         "registers": ("project_parameters", "technical_works"),
+        "specialists": ("project_parameters", "structural_hidden_works"),
     },
     {
         "code": "technical_economic_conclusion",
@@ -114,6 +124,12 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
             "contracts_and_economics",
             "declarations_and_conclusions",
         ),
+        "specialists": (
+            "contractual_economic",
+            "chronology_completion",
+            "structural_hidden_works",
+            "materials_quality",
+        ),
     },
     {
         "code": "copies_and_signatures",
@@ -121,6 +137,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         "fact_fields": ("investor", "contractor", "supervisor", "kolaudator"),
         "evidence_sections": (),
         "registers": ("stakeholders",),
+        "specialists": ("legal_administrative",),
     },
 )
 
@@ -131,15 +148,32 @@ def plan_kolaudim_act(state: AuditGraphState) -> AuditGraphState:
     canonical_facts = dossier.get("canonical_facts", {}) if isinstance(dossier, dict) else {}
     evidence = dossier.get("evidence_by_section", {}) if isinstance(dossier, dict) else {}
     registers = dossier.get("registers", {}) if isinstance(dossier, dict) else {}
+    specialist_reviews = state.get("specialist_reviews", {})
+    memoranda = (
+        specialist_reviews.get("memoranda", [])
+        if isinstance(specialist_reviews, dict)
+        else []
+    )
     if not isinstance(canonical_facts, dict):
         canonical_facts = {}
     if not isinstance(evidence, dict):
         evidence = {}
     if not isinstance(registers, dict):
         registers = {}
+    memoranda_by_code = {
+        str(memo.get("code")): memo
+        for memo in memoranda
+        if isinstance(memo, dict) and memo.get("code")
+    }
 
     sections = [
-        _section_plan(section, canonical_facts, evidence, registers)
+        _section_plan(
+            section,
+            canonical_facts,
+            evidence,
+            registers,
+            memoranda_by_code,
+        )
         for section in KOLAUDIM_SECTIONS
     ]
     missing_core_fields = (
@@ -170,6 +204,7 @@ def _section_plan(
     canonical_facts: dict[str, Any],
     evidence: dict[str, Any],
     registers: dict[str, Any],
+    memoranda: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     available_fields = [
         field for field in section["fact_fields"] if canonical_facts.get(field)
@@ -190,6 +225,22 @@ def _section_plan(
         for register in section.get("registers", ())
         if isinstance(registers.get(register), list)
     }
+    specialist_context = {
+        code: {
+            "status": memoranda[code].get("status"),
+            "supported_statement_count": sum(
+                len(memoranda[code].get(key, []))
+                for key in (
+                    "established_facts",
+                    "technical_assessments",
+                    "qualifications",
+                    "writer_guidance",
+                )
+            ),
+        }
+        for code in section.get("specialists", ())
+        if code in memoranda
+    }
     return {
         "code": section["code"],
         "title": section["title"],
@@ -197,6 +248,7 @@ def _section_plan(
         "unresolved_fact_fields": missing_fields,
         "source_documents": source_documents,
         "register_entry_counts": register_entry_counts,
+        "specialist_context": specialist_context,
         "writing_instruction": (
             "Shkruaj vetëm nga evidenca e disponueshme; mos përdor gjuhë checklist "
             "dhe mos deklaro kontroll fizik që nuk provohet nga aktet burimore."

@@ -7,6 +7,7 @@ from app.agents.prompts import (
     DOCUMENT_ANALYSIS_SYSTEM_PROMPT,
     KOLAUDIM_WRITER_SYSTEM_PROMPT,
     SENIOR_REVIEW_SYSTEM_PROMPT,
+    SPECIALIST_REVIEW_SYSTEM_PROMPT,
 )
 from app.core.config import settings
 
@@ -60,6 +61,7 @@ PROVIDER_OUTPUT_TOKEN_LIMITS = {
 }
 
 KOLAUDIM_PROMPT_OVERHEAD_TOKENS = 1_400
+SPECIALIST_PROMPT_OVERHEAD_TOKENS = 1_000
 MIN_LONG_FORM_TIMEOUT_SECONDS = 90
 MAX_LONG_FORM_TIMEOUT_SECONDS = 300
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -173,6 +175,75 @@ SENIOR_REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+SPECIALIST_STATEMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["statement", "evidence_ids"],
+    "properties": {
+        "statement": {"type": "string"},
+        "evidence_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+}
+
+
+SPECIALIST_REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "memoranda"],
+    "properties": {
+        "status": {"type": "string", "enum": ["reviewed"]},
+        "memoranda": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "code",
+                    "established_facts",
+                    "technical_assessments",
+                    "qualifications",
+                    "writer_guidance",
+                    "confidence",
+                ],
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "enum": [
+                            "legal_administrative",
+                            "project_parameters",
+                            "chronology_completion",
+                            "structural_hidden_works",
+                            "materials_quality",
+                            "contractual_economic",
+                        ],
+                    },
+                    "established_facts": {
+                        "type": "array",
+                        "items": SPECIALIST_STATEMENT_SCHEMA,
+                    },
+                    "technical_assessments": {
+                        "type": "array",
+                        "items": SPECIALIST_STATEMENT_SCHEMA,
+                    },
+                    "qualifications": {
+                        "type": "array",
+                        "items": SPECIALIST_STATEMENT_SCHEMA,
+                    },
+                    "writer_guidance": {
+                        "type": "array",
+                        "items": SPECIALIST_STATEMENT_SCHEMA,
+                    },
+                    "confidence": {"type": "number"},
+                },
+            },
+        },
+    },
+}
+
+
 KOLAUDIM_DRAFT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -264,6 +335,71 @@ def request_document_analysis(
         "temperature": 0,
         "max_tokens": document_analysis_max_output_tokens(ai_settings),
     }
+    reasoning_effort = document_analysis_reasoning_effort(ai_settings)
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
+
+    response_payload = _post_json(
+        "/chat/completions",
+        body,
+        ai_settings=ai_settings,
+        timeout_seconds=max(int(settings.openai_timeout_seconds), 90),
+        retry_transient=True,
+    )
+    response_payloads = [response_payload]
+    try:
+        parsed = _parse_document_analysis_response(response_payload)
+    except LLMReviewError:
+        retry_body = {
+            **body,
+            "messages": [
+                *body["messages"],
+                {
+                    "role": "user",
+                    "content": (
+                        "The previous completion was malformed or truncated. Return one "
+                        "complete JSON object matching the required schema. Keep summaries, "
+                        "excerpts, and values concise, but preserve every material supported "
+                        "claim. Do not add prose outside JSON."
+                    ),
+                },
+            ],
+        }
+        response_payload = _post_json(
+            "/chat/completions",
+            retry_body,
+            ai_settings=ai_settings,
+            timeout_seconds=max(int(settings.openai_timeout_seconds), 90),
+            retry_transient=True,
+        )
+        response_payloads.append(response_payload)
+        parsed = _parse_document_analysis_response(response_payload)
+
+    return parsed, _sum_response_token_usage(response_payloads)
+
+
+def request_specialist_review(
+    review_input: dict[str, Any],
+    *,
+    ai_settings: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        "model": ai_settings["model"],
+        "messages": [
+            {"role": "system", "content": SPECIALIST_REVIEW_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": _specialist_review_user_content(review_input),
+            },
+        ],
+        "response_format": _schema_response_format(
+            ai_settings,
+            schema_name="atf_specialist_review",
+            schema=SPECIALIST_REVIEW_SCHEMA,
+        ),
+        "temperature": 0,
+        "max_tokens": specialist_review_max_output_tokens(ai_settings),
+    }
     response_payload = _post_json(
         "/chat/completions",
         body,
@@ -272,8 +408,10 @@ def request_document_analysis(
         retry_transient=True,
     )
     text = _extract_chat_completion_content(response_payload)
-    parsed = _parse_model_json_object(text, error_label="AI document analyzer")
-    return parsed, _extract_token_usage(response_payload)
+    parsed = _parse_model_json_object(text, error_label="AI specialist reviewer")
+    if not isinstance(parsed, dict):
+        raise LLMReviewError("AI specialist reviewer returned a non-object JSON response.")
+    return parsed
 
 
 def request_kolaudim_draft(
@@ -324,7 +462,37 @@ def model_request_token_limit(ai_settings: dict[str, Any]) -> int:
 
 
 def document_analysis_max_output_tokens(ai_settings: dict[str, Any]) -> int:
-    return min(model_output_token_limit(ai_settings), 4_000)
+    return model_output_token_limit(ai_settings)
+
+
+def document_analysis_reasoning_effort(
+    ai_settings: dict[str, Any],
+) -> str | None:
+    if str(ai_settings.get("provider") or "").strip().lower() != "gemini":
+        return None
+
+    model = str(ai_settings.get("model") or "").strip().lower()
+    if model.startswith("gemini-2.5-"):
+        return "none"
+    if model.startswith("gemini-3"):
+        return "low"
+    return None
+
+
+def specialist_review_max_output_tokens(ai_settings: dict[str, Any]) -> int:
+    request_limit = model_request_token_limit(ai_settings)
+    output_limit = model_output_token_limit(ai_settings)
+    configured_limit = max(1_200, int(settings.openai_max_output_tokens or 1_800))
+    if request_limit <= 9_000:
+        return min(configured_limit, output_limit, 1_800)
+    return min(max(configured_limit, 4_000), output_limit, 6_000)
+
+
+def specialist_review_input_token_budget(ai_settings: dict[str, Any]) -> int:
+    request_limit = model_request_token_limit(ai_settings)
+    output_tokens = specialist_review_max_output_tokens(ai_settings)
+    budget = request_limit - output_tokens - SPECIALIST_PROMPT_OVERHEAD_TOKENS
+    return max(1_800, budget)
 
 
 def kolaudim_draft_max_output_tokens(ai_settings: dict[str, Any]) -> int:
@@ -429,6 +597,30 @@ def _document_analysis_user_content(analysis_input: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _specialist_review_user_content(review_input: dict[str, Any]) -> str:
+    statement_shape = {
+        "statement": "pohim profesional në shqip",
+        "evidence_ids": ["vetëm ID të lejuara për domain-in"],
+    }
+    payload = {
+        "required_output_shape": {
+            "status": "reviewed",
+            "memoranda": [
+                {
+                    "code": "one exact code from specialist_input.domains",
+                    "established_facts": [statement_shape],
+                    "technical_assessments": [statement_shape],
+                    "qualifications": [statement_shape],
+                    "writer_guidance": [statement_shape],
+                    "confidence": "number between 0 and 1",
+                }
+            ],
+        },
+        "specialist_input": review_input,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _kolaudim_user_content(draft_input: dict[str, Any]) -> str:
     payload = {
         "required_output_shape": {
@@ -467,7 +659,7 @@ def _schema_response_format(
     schema_name: str,
     schema: dict[str, Any],
 ) -> dict[str, Any]:
-    if ai_settings.get("provider") in {"gemini", "groq"}:
+    if ai_settings.get("provider") == "groq":
         return {"type": "json_object"}
 
     return {
@@ -478,6 +670,13 @@ def _schema_response_format(
             "schema": schema,
         },
     }
+
+
+def _parse_document_analysis_response(
+    response_payload: dict[str, Any],
+) -> dict[str, Any]:
+    text = _extract_chat_completion_content(response_payload)
+    return _parse_model_json_object(text, error_label="AI document analyzer")
 
 
 def _parse_model_json_object(text: str, *, error_label: str) -> dict[str, Any]:
@@ -657,3 +856,13 @@ def _extract_token_usage(payload: dict[str, Any]) -> dict[str, int]:
         if isinstance(value, int) and value >= 0:
             normalized[key] = value
     return normalized
+
+
+def _sum_response_token_usage(
+    payloads: list[dict[str, Any]],
+) -> dict[str, int]:
+    total: dict[str, int] = {}
+    for payload in payloads:
+        for key, value in _extract_token_usage(payload).items():
+            total[key] = total.get(key, 0) + value
+    return total

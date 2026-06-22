@@ -10,11 +10,28 @@ from app.files import parse_service
 from app.files.models import ParsedDocument
 from app.files.parse_service import (
     MAX_CHUNK_CHARS,
+    _completed_parse_status,
     _parse_docx,
     _parse_pdf,
     _replace_document_chunks,
     _split_text,
 )
+
+
+def test_textless_pdf_requires_ocr() -> None:
+    assert _completed_parse_status(suffix=".pdf", chunks=[], page_count=3) == "needs_ocr"
+
+
+def test_parse_completion_status_distinguishes_readable_and_empty_files() -> None:
+    assert (
+        _completed_parse_status(
+            suffix=".pdf",
+            chunks=[{"text": "Tekst i lexueshëm"}],
+            page_count=1,
+        )
+        == "parsed"
+    )
+    assert _completed_parse_status(suffix=".docx", chunks=[], page_count=None) == "empty"
 
 
 def test_split_text_preserves_all_content_with_bounded_chunks() -> None:

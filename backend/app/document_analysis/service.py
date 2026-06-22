@@ -263,7 +263,10 @@ async def ensure_project_document_analyses(
             chunk_count = await _chunk_count(session, file_version_id=file_version.id)
             if chunk_count == 0:
                 await parse_file_version(session, file_version_id=file_version.id)
+                await session.refresh(file_version)
         if file_version.parse_status != "parsed":
+            continue
+        if await _chunk_count(session, file_version_id=file_version.id) == 0:
             continue
         analyses.append(
             await analyze_file_version(

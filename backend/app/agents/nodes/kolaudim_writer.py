@@ -160,6 +160,9 @@ def _build_kolaudim_writer_input(
         "project_fallback_metadata": state.get("project", {}),
         "job": state.get("job", {}),
         "professional_dossier": dossier,
+        "specialist_memoranda": _compact_specialist_reviews(
+            state.get("specialist_reviews")
+        ),
         "legal_basis": _compact_legal_basis(state),
         "section_blueprint": _section_blueprint(state.get("kolaudim_analysis", {})),
         "instructions": [
@@ -169,6 +172,8 @@ def _build_kolaudim_writer_input(
             "çdo formulimi tjetër.",
             "Përdor regjistrat profesionalë për kronologjinë, punimet, materialet, "
             "provat, kontratat dhe vlerat.",
+            "Përdor memorandat specialistike vetëm si sintezë; çdo fakt duhet të "
+            "mbetet në përputhje me regjistrat dhe faktet kanonike.",
             "Dokumentet me evidence_role=style_reference përdoren vetëm për "
             "strukturë dhe stil, kurrë për fakte.",
             "Dokumentet me evidence_role=foreign_project_reference i përkasin një "
@@ -276,6 +281,10 @@ def _shrink_writer_input(writer_input: dict[str, Any]) -> bool:
         return True
 
     dossier = writer_input.get("professional_dossier")
+    specialist_memoranda = writer_input.get("specialist_memoranda")
+    if isinstance(specialist_memoranda, dict):
+        if _shrink_specialist_memoranda(specialist_memoranda):
+            return True
     if isinstance(dossier, dict):
         if _shrink_canonical_facts(dossier):
             return True
@@ -288,6 +297,81 @@ def _shrink_writer_input(writer_input: dict[str, Any]) -> bool:
         if _remove_last_list_item(dossier, "conflicts", 3):
             return True
 
+    return False
+
+
+def _shrink_specialist_memoranda(value: dict[str, Any]) -> bool:
+    memoranda = value.get("memoranda")
+    if not isinstance(memoranda, list):
+        return False
+
+    statement_keys = (
+        ("writer_guidance", 0),
+        ("qualifications", 0),
+        ("technical_assessments", 1),
+        ("established_facts", 1),
+    )
+    for key, minimum in statement_keys:
+        candidates = [
+            memo
+            for memo in memoranda
+            if isinstance(memo, dict)
+            and isinstance(memo.get(key), list)
+            and len(memo[key]) > minimum
+        ]
+        if candidates:
+            largest = max(candidates, key=lambda memo: len(memo[key]))
+            largest[key].pop()
+            return True
+
+    statements = [
+        statement
+        for memo in memoranda
+        if isinstance(memo, dict)
+        for key, _ in statement_keys
+        for statement in memo.get(key, [])
+        if isinstance(statement, dict)
+    ]
+    source_candidates = [
+        statement
+        for statement in statements
+        if isinstance(statement.get("source_references"), list)
+        and statement["source_references"]
+    ]
+    if source_candidates:
+        largest_sources = max(
+            source_candidates,
+            key=lambda statement: len(statement["source_references"]),
+        )
+        largest_sources["source_references"].pop()
+        return True
+
+    text_candidates = [
+        statement
+        for statement in statements
+        if len(str(statement.get("statement") or "")) > 240
+    ]
+    if text_candidates:
+        longest = max(
+            text_candidates,
+            key=lambda statement: len(str(statement.get("statement") or "")),
+        )
+        text = str(longest["statement"])
+        longest["statement"] = _truncate(text, max(240, len(text) // 2))
+        return True
+
+    for key in ("technical_assessments", "established_facts"):
+        candidates = [
+            memo
+            for memo in memoranda
+            if isinstance(memo, dict)
+            and isinstance(memo.get(key), list)
+            and memo[key]
+        ]
+        if candidates:
+            largest = max(candidates, key=lambda memo: len(memo[key]))
+            largest[key].pop()
+            return True
     return False
 
 
@@ -440,6 +524,64 @@ def _compact_professional_dossier(dossier: object) -> dict[str, Any]:
         if isinstance(dossier.get("summary"), dict)
         else {},
     }
+
+
+def _compact_specialist_reviews(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    memoranda = value.get("memoranda")
+    if not isinstance(memoranda, list):
+        memoranda = []
+    return {
+        "status": value.get("status"),
+        "summary": dict(value.get("summary", {}))
+        if isinstance(value.get("summary"), dict)
+        else {},
+        "memoranda": [
+            {
+                "code": memo.get("code"),
+                "title": memo.get("title"),
+                "status": memo.get("status"),
+                "confidence": memo.get("confidence"),
+                "established_facts": _compact_specialist_statements(
+                    memo.get("established_facts")
+                ),
+                "technical_assessments": _compact_specialist_statements(
+                    memo.get("technical_assessments")
+                ),
+                "qualifications": _compact_specialist_statements(
+                    memo.get("qualifications")
+                ),
+                "writer_guidance": _compact_specialist_statements(
+                    memo.get("writer_guidance")
+                ),
+            }
+            for memo in memoranda[:6]
+            if isinstance(memo, dict)
+        ],
+    }
+
+
+def _compact_specialist_statements(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {
+            "statement": _truncate(item.get("statement"), 600),
+            "evidence_ids": _string_list(item.get("evidence_ids"), limit=6),
+            "source_references": [
+                {
+                    "source_document": source.get("source_document"),
+                    "file_version_id": source.get("file_version_id"),
+                    "chunk_ids": _string_list(source.get("chunk_ids"), limit=3),
+                }
+                for source in item.get("source_references", [])[:3]
+                if isinstance(source, dict)
+            ],
+        }
+        for item in value[:5]
+        if isinstance(item, dict) and item.get("statement")
+    ]
 
 
 def _compact_registers(value: object) -> dict[str, list[dict[str, Any]]]:

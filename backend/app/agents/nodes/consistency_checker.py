@@ -200,10 +200,10 @@ def _document_parse_issues(documents: list[dict[str, Any]]) -> list[dict[str, An
             {
                 "code": "CONSISTENCY-UNSUPPORTED-DOCUMENTS",
                 "severity": "major",
-                "title": "Ka dokumente që nuk u lexuan nga sistemi",
+                "title": "Ka dokumente që kërkojnë OCR ose nuk u lexuan",
                 "description": (
-                    "Dokumentet në format të pambështetur nuk mund të përdoren si "
-                    "evidencë automatike për Akt Kolaudimi."
+                    "Dokumentet pa shtresë teksti ose në format të pambështetur nuk "
+                    "mund të përdoren si evidencë automatike pa OCR ose verifikim njerëzor."
                 ),
                 "evidence": unsupported[:20],
             }

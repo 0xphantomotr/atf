@@ -18,6 +18,7 @@ from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.professional_dossier import build_professional_dossier
 from app.agents.nodes.report_writer import write_report
 from app.agents.nodes.senior_reviewer import senior_review
+from app.agents.nodes.specialist_reviews import review_specialist_domains
 from app.agents.nodes.vkm_obligation_mapper import map_vkm_obligations
 from app.core.config import settings
 from app.reviews.service import (
@@ -82,6 +83,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         audit_completeness,
         verify_evidence,
         check_professional_consistency,
+        review_specialist_domains,
         plan_kolaudim_act,
         senior_review,
         write_kolaudim_draft,
@@ -100,6 +102,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
         "deterministic_completeness",
         "evidence_verifier",
         "consistency_checker",
+        "specialist_reviews",
         "kolaudim_planner",
         "senior_reviewer",
         "kolaudim_writer",
@@ -114,6 +117,7 @@ def test_phase_one_nodes_build_trace_and_report(monkeypatch) -> None:
     assert state["vkm_obligation_map"]["summary"]["missing"] >= 1
     assert state["consistency_review"]["summary"]["issue_count"] >= 1
     assert state["professional_dossier"]["summary"]["documents_received"] == 2
+    assert state["specialist_reviews"]["status"] == "skipped"
     assert state["kolaudim_analysis"]["target_output"] == "professional_akt_kolaudimi"
     assert (
         state["kolaudim_analysis"]["generation_mode"]
@@ -641,6 +645,34 @@ def test_writer_prefers_consolidated_registers_over_raw_excerpts() -> None:
             "missing_core_fields": [],
             "summary": {"persisted_analysis_count": 1},
         },
+        "specialist_reviews": {
+            "status": "reviewed",
+            "summary": {"memorandum_count": 6},
+            "memoranda": [
+                {
+                    "code": "legal_administrative",
+                    "title": "Dokumentacioni ligjor dhe administrativ",
+                    "status": "reviewed",
+                    "confidence": 0.9,
+                    "established_facts": [
+                        {
+                            "statement": "Leja nr. 42 është identifikuar.",
+                            "evidence_ids": ["permits_property_licenses:0"],
+                            "source_references": [
+                                {
+                                    "source_document": "leje.pdf",
+                                    "file_version_id": "version-1",
+                                    "chunk_ids": ["chunk-1"],
+                                }
+                            ],
+                        }
+                    ],
+                    "technical_assessments": [],
+                    "qualifications": [],
+                    "writer_guidance": [],
+                }
+            ],
+        },
         "kolaudim_analysis": {"sections": []},
         "rules": [],
     }
@@ -657,6 +689,8 @@ def test_writer_prefers_consolidated_registers_over_raw_excerpts() -> None:
     assert writer_input["document_evidence"] == []
     register = writer_input["professional_dossier"]["registers"]
     assert register["permits_property_licenses"][0]["value"] == "Nr. 42"
+    specialist = writer_input["specialist_memoranda"]["memoranda"][0]
+    assert specialist["established_facts"][0]["statement"].startswith("Leja nr. 42")
     assert "Ky tekst i papërpunuar" not in str(writer_input)
 
 

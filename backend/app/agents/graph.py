@@ -14,6 +14,7 @@ from app.agents.nodes.professional_dossier import build_professional_dossier
 from app.agents.nodes.report_writer import write_report
 from app.agents.nodes.claim_verifier import verify_kolaudim_claims
 from app.agents.nodes.senior_reviewer import senior_review
+from app.agents.nodes.specialist_reviews import review_specialist_domains
 from app.agents.nodes.vkm_obligation_mapper import map_vkm_obligations
 from app.agents.state import AuditGraphState
 
@@ -38,6 +39,7 @@ def build_audit_graph() -> Any:
     workflow.add_node("deterministic_completeness", audit_completeness)
     workflow.add_node("evidence_verifier", verify_evidence)
     workflow.add_node("consistency_checker", check_professional_consistency)
+    workflow.add_node("specialist_reviews", review_specialist_domains)
     workflow.add_node("kolaudim_planner", plan_kolaudim_act)
     workflow.add_node("senior_reviewer", senior_review)
     workflow.add_node("kolaudim_writer", write_kolaudim_draft)
@@ -53,7 +55,8 @@ def build_audit_graph() -> Any:
     workflow.add_edge("vkm_obligation_mapper", "deterministic_completeness")
     workflow.add_edge("deterministic_completeness", "evidence_verifier")
     workflow.add_edge("evidence_verifier", "consistency_checker")
-    workflow.add_edge("consistency_checker", "kolaudim_planner")
+    workflow.add_edge("consistency_checker", "specialist_reviews")
+    workflow.add_edge("specialist_reviews", "kolaudim_planner")
     workflow.add_edge("kolaudim_planner", "senior_reviewer")
     workflow.add_edge("senior_reviewer", "kolaudim_writer")
     workflow.add_edge("kolaudim_writer", "claim_verifier")

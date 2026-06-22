@@ -7,6 +7,25 @@ def senior_review(state: AuditGraphState) -> AuditGraphState:
     state.setdefault("agent_trace", []).append("senior_reviewer")
     ai_settings = state.get("ai_settings")
 
+    specialist_reviews = state.get("specialist_reviews", {})
+    specialist_status = (
+        specialist_reviews.get("status")
+        if isinstance(specialist_reviews, dict)
+        else None
+    )
+    if state.get("job", {}).get("job_type") == "kolaudim_act" and specialist_status in {
+        "reviewed",
+        "partially_reviewed",
+        "invalid_model_output",
+        "insufficient_evidence",
+        "failed",
+    }:
+        state["ai_review"] = {
+            "status": "skipped",
+            "reason": "replaced_by_specialist_review_stage",
+        }
+        return state
+
     if not settings.ai_senior_review_enabled:
         state["ai_review"] = {
             "status": "skipped",
@@ -83,7 +102,8 @@ def _build_review_input(state: AuditGraphState) -> dict:
             "Rishiko vetëm gjetjet deterministike të dhëna.",
             "Rishiko edhe përmbledhjet e analizës profesionale pa krijuar fakte të reja.",
             "Mos shto gjetje përfundimtare të reja.",
-            "Nëse një dokument i paklasifikuar mund të mbulojë një mungesë, kërko verifikim njerëzor.",
+            "Nëse një dokument i paklasifikuar mund të mbulojë një mungesë, "
+            "kërko verifikim njerëzor.",
             "Arsyetimi duhet të jetë i shkurtër, teknik dhe në shqip.",
         ],
     }
@@ -139,6 +159,7 @@ def _professional_review_context(state: AuditGraphState) -> dict:
     vkm_obligations = state.get("vkm_obligation_map", {})
     consistency_review = state.get("consistency_review", {})
     kolaudim_analysis = state.get("kolaudim_analysis", {})
+    specialist_reviews = state.get("specialist_reviews", {})
     return {
         "fact_summary": (
             dict(extracted_facts.get("summary", {}))
@@ -159,6 +180,11 @@ def _professional_review_context(state: AuditGraphState) -> dict:
             kolaudim_analysis.get("readiness")
             if isinstance(kolaudim_analysis, dict)
             else None
+        ),
+        "specialist_review_summary": (
+            dict(specialist_reviews.get("summary", {}))
+            if isinstance(specialist_reviews, dict)
+            else {}
         ),
     }
 

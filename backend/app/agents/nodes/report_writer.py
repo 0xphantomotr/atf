@@ -7,6 +7,7 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
     findings = state.get("verified_findings", state.get("findings", []))
     ai_review = state.get("ai_review", {})
     kolaudim_analysis = state.get("kolaudim_analysis", {})
+    specialist_reviews = state.get("specialist_reviews", {})
     kolaudim_draft = state.get("kolaudim_draft", {})
     needs_human_review = bool(state.get("needs_human_review", False))
     is_kolaudim = state.get("job", {}).get("job_type") == "kolaudim_act"
@@ -15,7 +16,11 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
     classified_documents = int(inventory.get("classified_documents", 0) or 0)
     finding_count = len(findings)
 
-    if is_kolaudim and isinstance(kolaudim_draft, dict) and kolaudim_draft.get("status") == "drafted":
+    if (
+        is_kolaudim
+        and isinstance(kolaudim_draft, dict)
+        and kolaudim_draft.get("status") == "drafted"
+    ):
         summary = str(kolaudim_draft.get("executive_summary") or "").strip()
         recommendation = "Projekt-akt i gatshëm për kontroll dhe nënshkrim profesional"
     elif is_kolaudim:
@@ -50,6 +55,11 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
         "finding_count": finding_count,
         "verified_finding_count": len(state.get("verified_findings", [])),
         "ai_review_status": ai_review.get("status", "not_run"),
+        "specialist_review_status": (
+            specialist_reviews.get("status", "not_run")
+            if isinstance(specialist_reviews, dict)
+            else "not_run"
+        ),
         "kolaudim_draft_status": (
             kolaudim_draft.get("status")
             if isinstance(kolaudim_draft, dict)

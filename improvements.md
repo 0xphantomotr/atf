@@ -177,6 +177,17 @@ Create structured specialist memoranda before drafting the final Akt:
 These stages should consume document analyses and canonical evidence. They should not
 independently invent project facts or rely on one large raw-document prompt.
 
+Current progress:
+
+- [x] Prepare six domain-specific evidence packets from consolidated registers.
+- [x] Generate six specialist memoranda through one bounded structured AI call.
+- [x] Require and validate domain-scoped evidence IDs for every AI statement.
+- [x] Discard uncited, invented and cross-domain specialist statements.
+- [x] Preserve file-version and chunk provenance on normalized memorandum statements.
+- [x] Replace the redundant general senior-review call for successful Akt reviews.
+- [x] Route specialist context into section planning and final Akt generation.
+- [x] Preserve deterministic evidence packets when AI review is skipped or fails.
+
 ## 8. Akt Generation And Correction
 
 The final writer should receive:

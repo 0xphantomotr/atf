@@ -19,6 +19,7 @@ class AuditGraphState(TypedDict, total=False):
     completeness_summary: dict[str, Any]
     verified_findings: list[dict[str, Any]]
     consistency_review: dict[str, Any]
+    specialist_reviews: dict[str, Any]
     kolaudim_analysis: dict[str, Any]
     kolaudim_draft: dict[str, Any]
     claim_verification: dict[str, Any]

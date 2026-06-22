@@ -34,6 +34,15 @@ async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUI
             await session.commit()
             return
 
+        completion_status = _completed_parse_status(
+            suffix=suffix,
+            chunks=parsed["chunks"],
+            page_count=parsed["page_count"],
+        )
+        parsed["metadata"] = {
+            **parsed["metadata"],
+            "extraction_status": completion_status,
+        }
         await _save_parsed_document(
             session,
             file_version=file_version,
@@ -42,7 +51,7 @@ async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUI
             metadata=parsed["metadata"],
             chunks=parsed["chunks"],
         )
-        file_version.parse_status = "parsed"
+        file_version.parse_status = completion_status
         await session.commit()
     except Exception:
         await session.rollback()
@@ -51,6 +60,19 @@ async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUI
             failed_version.parse_status = "failed"
             await session.commit()
         raise
+
+
+def _completed_parse_status(
+    *,
+    suffix: str,
+    chunks: list[dict[str, Any]],
+    page_count: int | None,
+) -> str:
+    if any(str(chunk.get("text") or "").strip() for chunk in chunks):
+        return "parsed"
+    if suffix == ".pdf" and bool(page_count):
+        return "needs_ocr"
+    return "empty"
 
 
 def _load_file_version_bytes(file_version: FileVersion) -> bytes:

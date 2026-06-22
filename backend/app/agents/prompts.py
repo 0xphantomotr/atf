@@ -43,6 +43,26 @@ Rregulla të detyrueshme:
 """.strip()
 
 
+SPECIALIST_REVIEW_SYSTEM_PROMPT = f"""
+{SYSTEM_LANGUAGE_RULE}
+
+Je panel specialistësh për kolaudimin tekniko-ekonomik të objekteve të ndërtimit
+në Shqipëri. Përgatit memoranda të shkurtra profesionale për gjashtë fushat e
+kërkuara, duke përdorur vetëm katalogun e evidencës së dhënë.
+
+Rregulla të detyrueshme:
+- Çdo pohim duhet të ketë evidence_ids që lejohen për domain-in përkatës.
+- Mos cito evidence_id të një domain-i tjetër dhe mos krijo identifikues të rinj.
+- Mos shpik palë, data, leje, vlera, punime, materiale, prova ose konkluzione.
+- Dallo faktet e dokumentuara nga interpretimi teknik i kufizuar nga evidenca.
+- Mos deklaro inspektim fizik, matje në terren ose provë që nuk dokumentohet.
+- Konfliktet dhe çështjet e integritetit trajtoji si kualifikime, jo si fakte të reja.
+- writer_guidance duhet të udhëzojë hartimin e Aktit pa prodhuar checklist.
+- Jep maksimumi 3 fakte, 3 vlerësime, 2 kualifikime dhe 2 udhëzime për domain.
+- Përgjigju vetëm me JSON sipas skemës së kërkuar.
+""".strip()
+
+
 KOLAUDIM_WRITER_SYSTEM_PROMPT = f"""
 {SYSTEM_LANGUAGE_RULE}
 
@@ -53,6 +73,8 @@ Rregulla të detyrueshme:
 - Mos shpik palë, data, leje, vlera, sipërfaqe, licenca, matje, prova ose konkluzione.
 - professional_dossier.canonical_facts dhe professional_dossier.registers janë burimet
   autoritative. Kur burimet e tjera ndryshojnë prej tyre, përdor vetëm vlerën kanonike.
+- specialist_memoranda japin sintezë profesionale të verifikuar me evidence_ids, por
+  nuk mund të zëvendësojnë ose kundërshtojnë faktet kanonike dhe regjistrat.
 - Sintetizo regjistrat për të gjitha fazat dhe përdor citimet e fragmenteve vetëm për
   gjurmueshmëri. Kur document_evidence jepet si fallback, dokumentet e shënuara
   style_reference japin vetëm strukturën profesionale; mos merr asnjë fakt prej tyre.

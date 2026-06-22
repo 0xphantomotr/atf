@@ -6,6 +6,7 @@ from app.agents.llm import (
     _parse_model_json_object,
     _post_json,
     _response_format,
+    document_analysis_reasoning_effort,
     kolaudim_draft_input_token_budget,
     kolaudim_draft_max_output_tokens,
     kolaudim_request_timeout_seconds,
@@ -14,6 +15,9 @@ from app.agents.llm import (
     request_kolaudim_draft,
     request_document_analysis,
     request_senior_review,
+    request_specialist_review,
+    specialist_review_input_token_budget,
+    specialist_review_max_output_tokens,
 )
 
 
@@ -94,8 +98,11 @@ def test_response_format_uses_json_object_for_groq() -> None:
     assert _response_format({"provider": "groq"}) == {"type": "json_object"}
 
 
-def test_response_format_uses_json_object_for_gemini() -> None:
-    assert _response_format({"provider": "gemini"}) == {"type": "json_object"}
+def test_response_format_uses_strict_schema_for_gemini() -> None:
+    response_format = _response_format({"provider": "gemini"})
+
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
 
 
 def test_response_format_uses_strict_schema_for_other_providers() -> None:
@@ -194,12 +201,142 @@ def test_request_document_analysis_uses_structured_chunk_prompt(monkeypatch) -> 
 
     user_payload = json.loads(captured["body"]["messages"][1]["content"])
     assert captured["path"] == "/chat/completions"
-    assert captured["body"]["response_format"] == {"type": "json_object"}
-    assert captured["body"]["max_tokens"] == 4_000
+    assert captured["body"]["response_format"]["type"] == "json_schema"
+    assert captured["body"]["max_tokens"] == 12_000
+    assert captured["body"]["reasoning_effort"] == "none"
     assert captured["kwargs"]["retry_transient"] is True
     assert user_payload["analysis_input"]["chunks"][0]["chunk_index"] == 0
     assert analysis["status"] == "analyzed"
     assert usage["total_tokens"] == 120
+
+
+def test_request_document_analysis_retries_truncated_json_once(monkeypatch) -> None:
+    calls = []
+
+    def fake_post_json(path, body, *, ai_settings, **kwargs):
+        calls.append(body)
+        if len(calls) == 1:
+            return {
+                "choices": [{"message": {"content": '{"status":"analyzed"'}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                },
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "status": "analyzed",
+                                "document_summary": "Përmbledhje.",
+                                "document_purpose": "Kontratë.",
+                                "authoritative_role": "primary evidence",
+                                "claims": [],
+                                "limitations": [],
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 110,
+                "completion_tokens": 30,
+                "total_tokens": 140,
+            },
+        }
+
+    monkeypatch.setattr("app.agents.llm._post_json", fake_post_json)
+
+    analysis, usage = request_document_analysis(
+        {
+            "document": {"filename": "kontrate.docx"},
+            "chunks": [{"chunk_index": 0, "text": "Kontratë mbikëqyrjeje"}],
+        },
+        ai_settings={
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "base_url": "https://example.invalid/v1beta/openai",
+            "api_key": "test",
+        },
+    )
+
+    assert len(calls) == 2
+    assert len(calls[1]["messages"]) == 3
+    assert "malformed or truncated" in calls[1]["messages"][2]["content"]
+    assert analysis["status"] == "analyzed"
+    assert usage == {
+        "prompt_tokens": 210,
+        "completion_tokens": 80,
+        "total_tokens": 290,
+    }
+
+
+def test_document_analysis_reasoning_effort_is_model_aware() -> None:
+    assert document_analysis_reasoning_effort(
+        {"provider": "gemini", "model": "gemini-2.5-flash"}
+    ) == "none"
+    assert document_analysis_reasoning_effort(
+        {"provider": "gemini", "model": "gemini-3-flash"}
+    ) == "low"
+    assert document_analysis_reasoning_effort(
+        {"provider": "openai", "model": "gpt-4.1-mini"}
+    ) is None
+
+
+def test_request_specialist_review_uses_one_structured_provider_call(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post_json(path, body, *, ai_settings, **kwargs):
+        captured["path"] = path
+        captured["body"] = body
+        captured["kwargs"] = kwargs
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {"status": "reviewed", "memoranda": []}
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.agents.llm._post_json", fake_post_json)
+    ai_settings = {
+        "provider": "gemini",
+        "model": "gemini-2.5-flash",
+        "base_url": "https://example.invalid/v1beta/openai",
+        "api_key": "test",
+    }
+
+    result = request_specialist_review(
+        {"domains": [], "evidence_catalog": {}},
+        ai_settings=ai_settings,
+    )
+
+    user_payload = json.loads(captured["body"]["messages"][1]["content"])
+    assert captured["path"] == "/chat/completions"
+    assert captured["body"]["response_format"]["type"] == "json_schema"
+    assert captured["body"]["max_tokens"] == specialist_review_max_output_tokens(
+        ai_settings
+    )
+    assert captured["kwargs"]["retry_transient"] is True
+    assert "required_output_shape" in user_payload
+    assert result["status"] == "reviewed"
+
+
+def test_specialist_review_budget_is_dynamic() -> None:
+    groq = {"provider": "groq", "model": "openai/gpt-oss-20b"}
+    gemini = {"provider": "gemini", "model": "gemini-2.5-flash"}
+
+    assert specialist_review_max_output_tokens(groq) <= 1_800
+    assert specialist_review_input_token_budget(groq) < 8_000
+    assert specialist_review_max_output_tokens(gemini) == 4_000
+    assert specialist_review_input_token_budget(gemini) > 50_000
 
 
 def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None:
