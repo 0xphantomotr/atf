@@ -7,6 +7,11 @@ from app.agents.nodes.document_classifier import classify_documents
 from app.agents.nodes.evidence_verifier import verify_evidence
 from app.agents.nodes.fact_extractor import extract_project_facts
 from app.agents.nodes.kolaudim_planner import plan_kolaudim_act
+from app.agents.nodes.kolaudim_corrector import (
+    correct_kolaudim_draft,
+    enforce_publishable_kolaudim,
+    route_after_claim_verification,
+)
 from app.agents.nodes.kolaudim_writer import write_kolaudim_draft
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
@@ -44,6 +49,8 @@ def build_audit_graph() -> Any:
     workflow.add_node("senior_reviewer", senior_review)
     workflow.add_node("kolaudim_writer", write_kolaudim_draft)
     workflow.add_node("claim_verifier", verify_kolaudim_claims)
+    workflow.add_node("kolaudim_corrector", correct_kolaudim_draft)
+    workflow.add_node("claim_verification_gate", enforce_publishable_kolaudim)
     workflow.add_node("report_writer", write_report)
 
     workflow.set_entry_point("project_context")
@@ -60,7 +67,16 @@ def build_audit_graph() -> Any:
     workflow.add_edge("kolaudim_planner", "senior_reviewer")
     workflow.add_edge("senior_reviewer", "kolaudim_writer")
     workflow.add_edge("kolaudim_writer", "claim_verifier")
-    workflow.add_edge("claim_verifier", "report_writer")
+    workflow.add_conditional_edges(
+        "claim_verifier",
+        route_after_claim_verification,
+        {
+            "correct": "kolaudim_corrector",
+            "finalize": "claim_verification_gate",
+        },
+    )
+    workflow.add_edge("kolaudim_corrector", "claim_verifier")
+    workflow.add_edge("claim_verification_gate", "report_writer")
     workflow.add_edge("report_writer", END)
 
     return workflow.compile()

@@ -22,6 +22,7 @@ class AuditGraphState(TypedDict, total=False):
     specialist_reviews: dict[str, Any]
     kolaudim_analysis: dict[str, Any]
     kolaudim_draft: dict[str, Any]
+    kolaudim_correction: dict[str, Any]
     claim_verification: dict[str, Any]
     ai_settings: dict[str, Any]
     ai_review: dict[str, Any]

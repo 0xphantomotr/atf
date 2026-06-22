@@ -5,6 +5,7 @@ from urllib import error, request
 
 from app.agents.prompts import (
     DOCUMENT_ANALYSIS_SYSTEM_PROMPT,
+    KOLAUDIM_CORRECTION_SYSTEM_PROMPT,
     KOLAUDIM_WRITER_SYSTEM_PROMPT,
     SENIOR_REVIEW_SYSTEM_PROMPT,
     SPECIALIST_REVIEW_SYSTEM_PROMPT,
@@ -244,6 +245,29 @@ SPECIALIST_REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+GROUNDED_PARAGRAPH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["text", "claim_type", "evidence_ids", "confidence"],
+    "properties": {
+        "text": {"type": "string"},
+        "claim_type": {
+            "type": "string",
+            "enum": [
+                "documented_fact",
+                "professional_inference",
+                "qualification",
+            ],
+        },
+        "evidence_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "confidence": {"type": "number"},
+    },
+}
+
+
 KOLAUDIM_DRAFT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -260,20 +284,19 @@ KOLAUDIM_DRAFT_SCHEMA: dict[str, Any] = {
     "properties": {
         "status": {"type": "string", "enum": ["drafted"]},
         "title": {"type": "string"},
-        "executive_summary": {"type": "string"},
+        "executive_summary": GROUNDED_PARAGRAPH_SCHEMA,
         "sections": {
             "type": "array",
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["code", "title", "body", "evidence_notes"],
+                "required": ["code", "title", "paragraphs"],
                 "properties": {
                     "code": {"type": "string"},
                     "title": {"type": "string"},
-                    "body": {"type": "string"},
-                    "evidence_notes": {
+                    "paragraphs": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": GROUNDED_PARAGRAPH_SCHEMA,
                     },
                 },
             },
@@ -452,6 +475,45 @@ def request_kolaudim_draft(
     return parsed
 
 
+def request_kolaudim_correction(
+    correction_input: dict[str, Any],
+    *,
+    ai_settings: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        "model": ai_settings["model"],
+        "messages": [
+            {"role": "system", "content": KOLAUDIM_CORRECTION_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": _kolaudim_correction_user_content(correction_input),
+            },
+        ],
+        "response_format": _schema_response_format(
+            ai_settings,
+            schema_name="atf_kolaudim_correction",
+            schema=KOLAUDIM_DRAFT_SCHEMA,
+        ),
+        "temperature": 0,
+        "max_tokens": kolaudim_draft_max_output_tokens(ai_settings),
+    }
+    response_payload = _post_json(
+        "/chat/completions",
+        body,
+        ai_settings=ai_settings,
+        timeout_seconds=kolaudim_request_timeout_seconds(
+            correction_input,
+            ai_settings=ai_settings,
+        ),
+        retry_transient=True,
+    )
+    text = _extract_chat_completion_content(response_payload)
+    parsed = _parse_model_json_object(text, error_label="AI kolaudim corrector")
+    if not isinstance(parsed, dict):
+        raise LLMReviewError("AI kolaudim corrector returned a non-object JSON response.")
+    return parsed
+
+
 def model_request_token_limit(ai_settings: dict[str, Any]) -> int:
     provider = str(ai_settings.get("provider") or "").strip().lower()
     model = str(ai_settings.get("model") or "").strip()
@@ -622,17 +684,22 @@ def _specialist_review_user_content(review_input: dict[str, Any]) -> str:
 
 
 def _kolaudim_user_content(draft_input: dict[str, Any]) -> str:
+    paragraph_shape = {
+        "text": "professional Albanian paragraph",
+        "claim_type": "documented_fact | professional_inference | qualification",
+        "evidence_ids": ["only IDs present in draft_input.allowed_evidence_ids"],
+        "confidence": "number between 0 and 1",
+    }
     payload = {
         "required_output_shape": {
             "status": "drafted",
             "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
-            "executive_summary": "string",
+            "executive_summary": paragraph_shape,
             "sections": [
                 {
                     "code": "one code from draft_input.section_blueprint",
                     "title": "string",
-                    "body": "detailed professional paragraphs in Albanian",
-                    "evidence_notes": ["short evidence/source notes"],
+                    "paragraphs": [paragraph_shape],
                 }
             ],
             "reservations": ["only material technical qualifications; no document checklist"],
@@ -643,6 +710,37 @@ def _kolaudim_user_content(draft_input: dict[str, Any]) -> str:
         "draft_input": draft_input,
     }
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _kolaudim_correction_user_content(correction_input: dict[str, Any]) -> str:
+    paragraph_shape = {
+        "text": "revised professional Albanian paragraph",
+        "claim_type": "documented_fact | professional_inference | qualification",
+        "evidence_ids": ["only IDs present in correction_input.allowed_evidence_ids"],
+        "confidence": "number between 0 and 1",
+    }
+    return json.dumps(
+        {
+            "required_output_shape": {
+                "status": "drafted",
+                "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
+                "executive_summary": paragraph_shape,
+                "sections": [
+                    {
+                        "code": "existing section code",
+                        "title": "string",
+                        "paragraphs": [paragraph_shape],
+                    }
+                ],
+                "reservations": ["material qualifications only"],
+                "human_completion_items": ["internal metadata only"],
+                "signature_note": "string",
+                "confidence": "number between 0 and 1",
+            },
+            "correction_input": correction_input,
+        },
+        ensure_ascii=False,
+    )
 
 
 def _response_format(ai_settings: dict[str, Any]) -> dict[str, Any]:

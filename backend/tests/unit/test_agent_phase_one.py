@@ -695,6 +695,14 @@ def test_writer_prefers_consolidated_registers_over_raw_excerpts() -> None:
 
 
 def test_claim_verifier_accepts_clean_human_style_act() -> None:
+    summary = (
+        "Për Ndërtesë banimi në Fshati Ngraçan, Bashkia Mallakastër, "
+        "me investitor Mitat Shanaj."
+    )
+    section_body = (
+        "Zbatues EB-2000 shpk, mbikëqyrës Alisha Kerpi dhe "
+        "kolaudator Beqir Ademi."
+    )
     state = {
         "agent_trace": [],
         "professional_dossier": {
@@ -711,19 +719,42 @@ def test_claim_verifier_accepts_clean_human_style_act() -> None:
         "kolaudim_draft": {
             "status": "drafted",
             "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
-            "executive_summary": (
-                "Për Ndërtesë banimi në Fshati Ngraçan, Bashkia Mallakastër, "
-                "me investitor Mitat Shanaj."
-            ),
+            "executive_summary": summary,
             "sections": [
                 {
                     "title": f"Seksioni {index}",
-                    "body": (
-                        "Zbatues EB-2000 shpk, mbikëqyrës Alisha Kerpi dhe "
-                        "kolaudator Beqir Ademi."
-                    ),
+                    "body": section_body,
                 }
-                for index in range(8)
+                for index in range(10)
+            ],
+            "claim_ledger": [
+                {
+                    "claim_id": "executive_summary:0",
+                    "section_code": "executive_summary",
+                    "statement": summary,
+                    "claim_type": "documented_fact",
+                    "confidence": 0.9,
+                    "evidence_ids": [
+                        "canonical:object_name",
+                        "canonical:location",
+                        "canonical:investor",
+                    ],
+                },
+                *[
+                    {
+                        "claim_id": f"section_{index}:0",
+                        "section_code": f"section_{index}",
+                        "statement": section_body,
+                        "claim_type": "documented_fact",
+                        "confidence": 0.9,
+                        "evidence_ids": [
+                            "canonical:contractor",
+                            "canonical:supervisor",
+                            "canonical:kolaudator",
+                        ],
+                    }
+                    for index in range(10)
+                ],
             ],
             "signature_note": "Akti nënshkruhet nga palët përgjegjëse.",
         },

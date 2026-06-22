@@ -1,6 +1,12 @@
 import json
 from typing import Any
 
+from app.agents.claim_grounding import (
+    build_claim_evidence_catalog,
+    canonical_evidence_id,
+    claim_source_references,
+    register_evidence_id,
+)
 from app.agents.llm import (
     LLMReviewError,
     kolaudim_draft_input_token_budget,
@@ -122,8 +128,9 @@ def write_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
         return state
 
     try:
+        writer_input = _build_kolaudim_writer_input(state, ai_settings=ai_settings)
         draft = request_kolaudim_draft(
-            _build_kolaudim_writer_input(state, ai_settings=ai_settings),
+            writer_input,
             ai_settings=ai_settings,
         )
     except LLMReviewError as exc:
@@ -138,7 +145,10 @@ def write_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
         state["needs_human_review"] = True
         return state
 
-    normalized_draft = _normalize_kolaudim_draft(draft)
+    normalized_draft = _normalize_kolaudim_draft(
+        draft,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
     normalized_draft["provider"] = ai_settings.get("provider")
     normalized_draft["model"] = ai_settings.get("model")
     normalized_draft["api_key_hint"] = ai_settings.get("api_key_hint")
@@ -155,7 +165,11 @@ def _build_kolaudim_writer_input(
 ) -> dict[str, Any]:
     input_token_budget = kolaudim_draft_input_token_budget(ai_settings)
     raw_dossier = state.get("professional_dossier", {})
-    dossier = _compact_professional_dossier(raw_dossier)
+    evidence_catalog = build_claim_evidence_catalog(state)
+    dossier = _compact_professional_dossier(
+        raw_dossier,
+        evidence_catalog=evidence_catalog,
+    )
     writer_input: dict[str, Any] = {
         "project_fallback_metadata": state.get("project", {}),
         "job": state.get("job", {}),
@@ -174,6 +188,11 @@ def _build_kolaudim_writer_input(
             "provat, kontratat dhe vlerat.",
             "Përdor memorandat specialistike vetëm si sintezë; çdo fakt duhet të "
             "mbetet në përputhje me regjistrat dhe faktet kanonike.",
+            "Çdo paragraf publik duhet të ketë claim_type dhe evidence_ids. Përdor "
+            "vetëm evidence_id që shfaqen në input.",
+            "documented_fact kërkon evidencë të drejtpërdrejtë; "
+            "professional_inference duhet të mbështetet në evidencë dhe të mos "
+            "paraqitet si matje ose inspektim fizik; qualification shpreh kufizim.",
             "Dokumentet me evidence_role=style_reference përdoren vetëm për "
             "strukturë dhe stil, kurrë për fakte.",
             "Dokumentet me evidence_role=foreign_project_reference i përkasin një "
@@ -254,6 +273,7 @@ def _set_budget_metadata(
     input_token_budget: int,
     ai_settings: dict[str, Any],
 ) -> None:
+    writer_input["allowed_evidence_ids"] = _writer_input_evidence_ids(writer_input)
     writer_input["budget"] = {
         "model": ai_settings.get("model"),
         "provider": ai_settings.get("provider"),
@@ -440,7 +460,11 @@ def _remove_last_list_item(
     return False
 
 
-def _compact_professional_dossier(dossier: object) -> dict[str, Any]:
+def _compact_professional_dossier(
+    dossier: object,
+    *,
+    evidence_catalog: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not isinstance(dossier, dict):
         return {}
 
@@ -450,7 +474,14 @@ def _compact_professional_dossier(dossier: object) -> dict[str, Any]:
         for field, fact in canonical.items():
             if not isinstance(fact, dict):
                 continue
+            evidence_id = canonical_evidence_id(str(field))
+            catalog_item = (evidence_catalog or {}).get(evidence_id, {})
             compact_facts[str(field)] = {
+                "evidence_id": evidence_id,
+                "supporting_evidence_ids": _string_list(
+                    catalog_item.get("supporting_evidence_ids"),
+                    limit=8,
+                ),
                 "value": fact.get("value"),
                 "confidence_level": fact.get("confidence_level"),
                 "source_documents": _string_list(
@@ -487,13 +518,21 @@ def _compact_professional_dossier(dossier: object) -> dict[str, Any]:
         "evidence_coverage": _compact_evidence_coverage(
             dossier.get("evidence_coverage")
         ),
-        "integrity_issues": _limit_dicts(dossier.get("integrity_issues", []), 10),
+        "integrity_issues": _numbered_items(
+            dossier.get("integrity_issues", []),
+            prefix="integrity",
+            limit=10,
+        ),
         "chronology": _limit_dicts(dossier.get("chronology", []), 40),
         "technical_observations": _limit_dicts(
             dossier.get("technical_observations", []),
             60,
         ),
-        "conflicts": _limit_dicts(dossier.get("conflicts", []), 12),
+        "conflicts": _numbered_items(
+            dossier.get("conflicts", []),
+            prefix="conflict",
+            limit=12,
+        ),
         "document_records": [
             dict(record)
             for record in dossier.get("document_records", [])
@@ -602,16 +641,25 @@ def _compact_registers(value: object) -> dict[str, list[dict[str, Any]]]:
     for register, entries in value.items():
         if not isinstance(entries, list):
             continue
-        compact[str(register)] = [
-            _compact_register_entry(entry)
-            for entry in entries[: limits.get(str(register), 40)]
+        register_name = str(register)
+        compact[register_name] = [
+            _compact_register_entry(
+                entry,
+                evidence_id=register_evidence_id(register_name, index),
+            )
+            for index, entry in enumerate(entries[: limits.get(register_name, 40)])
             if isinstance(entry, dict)
         ]
     return compact
 
 
-def _compact_register_entry(entry: dict[str, Any]) -> dict[str, Any]:
+def _compact_register_entry(
+    entry: dict[str, Any],
+    *,
+    evidence_id: str,
+) -> dict[str, Any]:
     return {
+        "evidence_id": evidence_id,
         "field_name": entry.get("field_name"),
         "value": entry.get("value"),
         "normalized_value": entry.get("normalized_value"),
@@ -667,18 +715,24 @@ def _compact_evidence_coverage(value: object) -> dict[str, Any]:
 
 def _compact_legal_basis(state: AuditGraphState) -> dict[str, Any]:
     references = []
+    evidence_ids = []
     seen = set()
     for rule in state.get("rules", []):
         if not isinstance(rule, dict):
             continue
+        rule_code = str(rule.get("rule_code") or "").strip()
         reference = str(rule.get("law_reference") or "").strip()
-        if not reference or reference in seen:
+        key = rule_code, reference
+        if not any(key) or key in seen:
             continue
-        seen.add(reference)
-        references.append(reference)
+        seen.add(key)
+        evidence_ids.append(f"law:{len(seen) - 1}")
+        if reference:
+            references.append(reference)
     return {
         "law_scope": state.get("job", {}).get("law_scope", []),
         "verified_references": references[:20],
+        "evidence_ids": evidence_ids[:20],
         "instruction": (
             "Përdor vetëm referencat e dhëna. Mos shpik numra nenesh ose akte të tjera."
         ),
@@ -831,34 +885,152 @@ def _per_document_excerpt_chars(
     return min(4_500, fair_share)
 
 
-def _normalize_kolaudim_draft(draft: dict[str, Any]) -> dict[str, Any]:
+def _normalize_kolaudim_draft(
+    draft: dict[str, Any],
+    *,
+    evidence_catalog: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     sections = draft.get("sections", [])
     if not isinstance(sections, list):
         sections = []
 
     normalized_sections = []
-    for section in sections:
+    claim_ledger: list[dict[str, Any]] = []
+    summary = _normalize_grounded_paragraph(
+        draft.get("executive_summary"),
+        claim_id="executive_summary:0",
+        section_code="executive_summary",
+        evidence_catalog=evidence_catalog,
+    )
+    if summary is not None:
+        claim_ledger.append(summary)
+
+    for section_index, section in enumerate(sections):
         if not isinstance(section, dict):
             continue
+        code = str(section.get("code", "")).strip() or "section"
+        paragraphs = []
+        raw_paragraphs = section.get("paragraphs", [])
+        if not isinstance(raw_paragraphs, list):
+            raw_paragraphs = []
+        for paragraph_index, paragraph in enumerate(raw_paragraphs):
+            normalized = _normalize_grounded_paragraph(
+                paragraph,
+                claim_id=f"{code}:{section_index}:{paragraph_index}",
+                section_code=code,
+                evidence_catalog=evidence_catalog,
+            )
+            if normalized is None:
+                continue
+            paragraphs.append(normalized["statement"])
+            claim_ledger.append(normalized)
         normalized_sections.append(
             {
-                "code": str(section.get("code", "")).strip() or "section",
+                "code": code,
                 "title": str(section.get("title", "")).strip() or "Seksion",
-                "body": str(section.get("body", "")).strip(),
-                "evidence_notes": _string_list(section.get("evidence_notes")),
+                "body": "\n\n".join(paragraphs),
             }
         )
 
     return {
         "status": "drafted",
         "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
-        "executive_summary": str(draft.get("executive_summary") or "").strip(),
+        "executive_summary": summary["statement"] if summary is not None else "",
         "sections": normalized_sections,
+        "claim_ledger": claim_ledger,
         "reservations": _string_list(draft.get("reservations")),
         "human_completion_items": _string_list(draft.get("human_completion_items")),
         "signature_note": str(draft.get("signature_note") or "").strip(),
         "confidence": _safe_float(draft.get("confidence")),
     }
+
+
+def _normalize_grounded_paragraph(
+    value: object,
+    *,
+    claim_id: str,
+    section_code: str,
+    evidence_catalog: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    statement = " ".join(str(value.get("text") or "").split())
+    if not statement:
+        return None
+    claim_type = str(value.get("claim_type") or "").strip()
+    evidence_ids = list(
+        dict.fromkeys(_string_list(value.get("evidence_ids"), limit=12))
+    )
+    return {
+        "claim_id": claim_id,
+        "section_code": section_code,
+        "statement": statement,
+        "claim_type": claim_type,
+        "evidence_ids": evidence_ids,
+        "confidence": _safe_float(value.get("confidence")),
+        "source_references": claim_source_references(
+            evidence_ids,
+            evidence_catalog,
+        ),
+    }
+
+
+def _writer_input_evidence_ids(writer_input: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    dossier = writer_input.get("professional_dossier", {})
+    if isinstance(dossier, dict):
+        for fact in dossier.get("canonical_facts", {}).values():
+            if not isinstance(fact, dict):
+                continue
+            ids.extend(_string_list([fact.get("evidence_id")]))
+            ids.extend(_string_list(fact.get("supporting_evidence_ids")))
+        for entries in dossier.get("registers", {}).values():
+            if not isinstance(entries, list):
+                continue
+            ids.extend(
+                str(entry.get("evidence_id"))
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("evidence_id")
+            )
+        for key in ("conflicts", "integrity_issues"):
+            ids.extend(
+                str(item.get("evidence_id"))
+                for item in dossier.get(key, [])
+                if isinstance(item, dict) and item.get("evidence_id")
+            )
+    legal_basis = writer_input.get("legal_basis", {})
+    if isinstance(legal_basis, dict):
+        ids.extend(_string_list(legal_basis.get("evidence_ids")))
+    specialist = writer_input.get("specialist_memoranda", {})
+    if isinstance(specialist, dict):
+        for memorandum in specialist.get("memoranda", []):
+            if not isinstance(memorandum, dict):
+                continue
+            for key in (
+                "established_facts",
+                "technical_assessments",
+                "qualifications",
+                "writer_guidance",
+            ):
+                for statement in memorandum.get(key, []):
+                    if isinstance(statement, dict):
+                        ids.extend(_string_list(statement.get("evidence_ids")))
+    return list(dict.fromkeys(ids))
+
+
+def _numbered_items(
+    value: object,
+    *,
+    prefix: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {"evidence_id": f"{prefix}:{index}", **dict(item)}
+        for index, item in enumerate(value[:limit])
+        if isinstance(item, dict)
+    ]
 
 
 def _limit_dicts(items: list[dict], limit: int) -> list[dict]:
@@ -868,7 +1040,11 @@ def _limit_dicts(items: list[dict], limit: int) -> list[dict]:
 def _string_list(value: object, *, limit: int | None = None) -> list[str]:
     if not isinstance(value, list):
         return []
-    items = [str(item).strip() for item in value if str(item).strip()]
+    items = [
+        str(item).strip()
+        for item in value
+        if item is not None and str(item).strip()
+    ]
     if limit is not None:
         return items[:limit]
     return items

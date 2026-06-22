@@ -57,7 +57,7 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
 - [x] Latest complete test run: 79 passed, 1 skipped.
 - [x] `.env`, API keys and local human reference documents excluded from commits.
 
-## Next Milestone: Claim-Grounded Finalization
+## Completed Milestone: Claim-Grounded Finalization
 
 This is the highest-priority improvement. The current verifier checks the draft globally,
 but it does not prove every material sentence. A stronger model alone can therefore write
@@ -65,20 +65,20 @@ an unsupported conclusion more convincingly.
 
 ### Deliverables
 
-- [ ] Make the writer return an internal claim ledger alongside the clean narrative.
-- [ ] Record for every material claim: section, claim type, evidence IDs, confidence and
+- [x] Make the writer return an internal claim ledger alongside the clean narrative.
+- [x] Record for every material claim: section, claim type, evidence IDs, confidence and
   whether it is a documented fact, professional inference or qualification.
-- [ ] Resolve every evidence ID against the current job's project and file-version
+- [x] Resolve every evidence ID against the current job's project and file-version
   snapshot.
-- [ ] Reject unknown, cross-project, superseded or non-existent evidence references.
-- [ ] Require direct evidence for completion, conformity, final measurement, testing and
+- [x] Reject unknown, cross-project, superseded or non-existent evidence references.
+- [x] Require direct evidence for completion, conformity, final measurement, testing and
   suitability-for-use conclusions.
-- [ ] Detect claims that imply a physical inspection when the folder only proves document
+- [x] Detect claims that imply a physical inspection when the folder only proves document
   review.
-- [ ] Produce targeted correction instructions for unsupported or contradictory claims.
-- [ ] Run at most one correction pass, then verify the revised draft again.
-- [ ] Render only the verified revision; keep the evidence ledger internal.
-- [ ] Never return an older successful PDF when the latest generation fails.
+- [x] Produce targeted correction instructions for unsupported or contradictory claims.
+- [x] Run at most one correction pass, then verify the revised draft again.
+- [x] Render only the verified revision; keep the evidence ledger internal.
+- [x] Never return an older successful PDF when the latest generation fails.
 
 ### Acceptance Criteria
 
@@ -88,13 +88,18 @@ an unsupported conclusion more convincingly.
 - The public PDF remains a clean Akt Kolaudimi without citations or system terminology.
 - Verification and one correction pass have deterministic termination.
 
-## Subsequent Improvements
+## Next Milestone: OCR For Scanned Evidence
 
-### OCR and richer ingestion
+### OCR deliverables
 
 - [ ] Add Albanian-capable OCR for scanned PDFs and images.
 - [ ] Preserve OCR page coordinates and confidence in document chunks.
 - [ ] Allow OCR results to be reviewed and reprocessed independently.
+
+## Subsequent Improvements
+
+### Richer ingestion
+
 - [ ] Add XLSX worksheet, row and formula extraction.
 - [ ] Add controlled conversion and extraction for legacy `.doc` files.
 - [ ] Add MPP task, dependency, milestone and deadline extraction.

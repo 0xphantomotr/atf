@@ -9,6 +9,8 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
     kolaudim_analysis = state.get("kolaudim_analysis", {})
     specialist_reviews = state.get("specialist_reviews", {})
     kolaudim_draft = state.get("kolaudim_draft", {})
+    kolaudim_correction = state.get("kolaudim_correction", {})
+    claim_verification = state.get("claim_verification", {})
     needs_human_review = bool(state.get("needs_human_review", False))
     is_kolaudim = state.get("job", {}).get("job_type") == "kolaudim_act"
 
@@ -63,6 +65,16 @@ def write_report(state: AuditGraphState) -> AuditGraphState:
         "kolaudim_draft_status": (
             kolaudim_draft.get("status")
             if isinstance(kolaudim_draft, dict)
+            else "not_run"
+        ),
+        "kolaudim_correction_status": (
+            kolaudim_correction.get("status", "not_run")
+            if isinstance(kolaudim_correction, dict)
+            else "not_run"
+        ),
+        "claim_verification_status": (
+            claim_verification.get("status", "not_run")
+            if isinstance(claim_verification, dict)
             else "not_run"
         ),
         "professional_readiness": (

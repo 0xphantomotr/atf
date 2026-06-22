@@ -12,6 +12,7 @@ from app.agents.llm import (
     kolaudim_request_timeout_seconds,
     model_output_token_limit,
     model_request_token_limit,
+    request_kolaudim_correction,
     request_kolaudim_draft,
     request_document_analysis,
     request_senior_review,
@@ -354,7 +355,12 @@ def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None
                             {
                                 "status": "drafted",
                                 "title": "Draft Akt Kolaudimi Teknik",
-                                "executive_summary": "Draft.",
+                                "executive_summary": {
+                                    "text": "Draft.",
+                                    "claim_type": "qualification",
+                                    "evidence_ids": ["integrity:0"],
+                                    "confidence": 0.6,
+                                },
                                 "sections": [],
                                 "reservations": [],
                                 "human_completion_items": [],
@@ -386,8 +392,67 @@ def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None
     assert captured["post_kwargs"]["retry_transient"] is True
     assert captured["post_kwargs"]["timeout_seconds"] >= 90
     assert "required_output_shape" in user_payload
+    assert "paragraphs" in user_payload["required_output_shape"]["sections"][0]
     assert user_payload["draft_input"]["project"]["name"] == "Test"
     assert draft["status"] == "drafted"
+
+
+def test_request_kolaudim_correction_uses_grounded_schema(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post_json(path, body, *, ai_settings, **kwargs):
+        captured["path"] = path
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "status": "drafted",
+                                "title": "AKT-KOLAUDIMI TEKNIKO-EKONOMIK",
+                                "executive_summary": {
+                                    "text": "Përmbledhje e korrigjuar.",
+                                    "claim_type": "qualification",
+                                    "evidence_ids": ["integrity:0"],
+                                    "confidence": 0.6,
+                                },
+                                "sections": [],
+                                "reservations": [],
+                                "human_completion_items": [],
+                                "signature_note": "Për nënshkrim.",
+                                "confidence": 0.7,
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.agents.llm._post_json", fake_post_json)
+
+    result = request_kolaudim_correction(
+        {
+            "current_draft": {},
+            "correction_issues": [{"code": "CLAIM-EVIDENCE-MISSING"}],
+            "allowed_evidence_ids": ["integrity:0"],
+            "budget": {"estimated_input_tokens": 100},
+        },
+        ai_settings={
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "base_url": "https://example.test/v1",
+            "api_key": "test",
+        },
+    )
+
+    payload = json.loads(captured["body"]["messages"][1]["content"])
+    assert captured["path"] == "/chat/completions"
+    assert "paragraphs" in payload["required_output_shape"]["sections"][0]
+    assert payload["correction_input"]["correction_issues"][0]["code"] == (
+        "CLAIM-EVIDENCE-MISSING"
+    )
+    assert result["status"] == "drafted"
 
 
 def test_kolaudim_draft_budget_is_dynamic_for_groq() -> None:

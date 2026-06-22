@@ -841,6 +841,7 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
     specialist_reviews = agent_state.get("specialist_reviews", {})
     kolaudim_analysis = agent_state.get("kolaudim_analysis", {})
     kolaudim_draft = agent_state.get("kolaudim_draft", {})
+    kolaudim_correction = agent_state.get("kolaudim_correction", {})
     claim_verification = agent_state.get("claim_verification", {})
     return {
         "phase": (
@@ -891,6 +892,11 @@ def _agent_metadata(agent_state: AuditGraphState | None) -> dict[str, object]:
         "kolaudim_draft_status": (
             kolaudim_draft.get("status") if isinstance(kolaudim_draft, dict) else None
         ),
+        "kolaudim_correction": (
+            dict(kolaudim_correction)
+            if isinstance(kolaudim_correction, dict)
+            else {}
+        ),
         "claim_verification": (
             dict(claim_verification.get("summary", {}))
             if isinstance(claim_verification, dict)
@@ -910,6 +916,7 @@ def _professional_analysis(agent_state: AuditGraphState | None) -> dict[str, obj
         "specialist_reviews": dict(agent_state.get("specialist_reviews", {})),
         "kolaudim_analysis": dict(agent_state.get("kolaudim_analysis", {})),
         "kolaudim_draft": dict(agent_state.get("kolaudim_draft", {})),
+        "kolaudim_correction": dict(agent_state.get("kolaudim_correction", {})),
         "claim_verification": dict(agent_state.get("claim_verification", {})),
     }
 
