@@ -14,6 +14,10 @@ RUN apt-get update \
       libgdk-pixbuf-2.0-0 \
       libcairo2 \
       shared-mime-info \
+      poppler-utils \
+      tesseract-ocr \
+      tesseract-ocr-eng \
+      tesseract-ocr-sqi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml /app/pyproject.toml
@@ -25,4 +29,3 @@ COPY alembic /app/alembic
 COPY alembic.ini /app/alembic.ini
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-

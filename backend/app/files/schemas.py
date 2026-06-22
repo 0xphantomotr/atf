@@ -76,3 +76,15 @@ class ParsedDocumentRead(BaseModel):
     page_count: int | None
     text_content: str | None
     document_metadata: dict
+
+
+class DocumentChunkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    file_version_id: UUID
+    chunk_index: int
+    page_start: int | None
+    page_end: int | None
+    text: str
+    chunk_metadata: dict

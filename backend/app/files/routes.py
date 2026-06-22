@@ -8,6 +8,7 @@ from app.files import service
 from app.files.schemas import (
     BulkFileSkipRead,
     BulkFileUploadRead,
+    DocumentChunkRead,
     FileVersionRead,
     ParsedDocumentRead,
     ProjectClassificationSummaryRead,
@@ -215,6 +216,49 @@ async def get_version_parsed_document(
         user_id=current_user.id,
     )
     return ParsedDocumentRead.model_validate(parsed_document)
+
+
+@router.get(
+    "/{file_id}/versions/{version_id}/chunks",
+    response_model=list[DocumentChunkRead],
+)
+async def list_version_document_chunks(
+    project_id: UUID,
+    file_id: UUID,
+    version_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[DocumentChunkRead]:
+    chunks = await service.list_document_chunks_for_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=version_id,
+        user_id=current_user.id,
+    )
+    return [DocumentChunkRead.model_validate(chunk) for chunk in chunks]
+
+
+@router.post(
+    "/{file_id}/versions/{version_id}/reprocess",
+    response_model=FileVersionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def reprocess_file_version(
+    project_id: UUID,
+    file_id: UUID,
+    version_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> FileVersionRead:
+    file_version = await service.reprocess_file_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=version_id,
+        user_id=current_user.id,
+    )
+    return FileVersionRead.model_validate(file_version)
 
 
 @router.post("/{file_id}/classify", response_model=ParsedDocumentRead)

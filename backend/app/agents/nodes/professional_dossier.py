@@ -12,6 +12,7 @@ from app.agents.dossier_consolidation import (
     consolidate_project_registers,
 )
 from app.agents.state import AuditGraphState
+from app.files.status import is_parsed_status
 
 PLACEHOLDER_PATTERN = re.compile(r"(?:\?{2,}|_{3,}|\.{5,}|\bxxx\b|\btodo\b)", re.I)
 DATE_PATTERN = re.compile(r"\b([0-3]?\d)[./-]([01]?\d)[./-]((?:19|20)?\d{2})\b")
@@ -389,7 +390,7 @@ def _analyse_document(
     lines = _lines(text)
     before_counts = {field: len(items) for field, items in candidates.items()}
 
-    if extract_excerpt_facts and parse_status == "parsed" and text:
+    if extract_excerpt_facts and is_parsed_status(parse_status) and text:
         for line in lines:
             _extract_labeled_values(line, document, candidates, style_reference)
             _extract_permit_values(line, document, candidates, style_reference)
@@ -1288,7 +1289,7 @@ def _foreign_reference_filename(filename: str) -> bool:
 
 
 def _document_role(parse_status: str, document_type: str, style_reference: bool) -> str:
-    if parse_status != "parsed":
+    if not is_parsed_status(parse_status):
         return "unreadable"
     if style_reference:
         return "style_reference"

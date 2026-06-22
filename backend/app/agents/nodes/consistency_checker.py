@@ -3,6 +3,7 @@ import unicodedata
 from typing import Any
 
 from app.agents.state import AuditGraphState
+from app.files.status import is_parsed_status
 
 PLACEHOLDER_PATTERN = re.compile(r"(\?{2,}|_{3,}|\.{5,}|\bxxx\b|\bTODO\b)", re.I)
 SINGLE_SOURCE_FACT_CATEGORIES = (
@@ -172,13 +173,14 @@ def _document_parse_issues(documents: list[dict[str, Any]]) -> list[dict[str, An
     unknown = [
         document.get("original_filename")
         for document in documents
-        if document.get("parse_status") == "parsed"
+        if is_parsed_status(document.get("parse_status"))
         and document.get("document_type") == "unknown"
     ]
     unsupported = [
         document.get("original_filename")
         for document in documents
-        if document.get("parse_status") not in {"parsed", "pending"}
+        if not is_parsed_status(document.get("parse_status"))
+        and document.get("parse_status") != "pending"
     ]
 
     issues: list[dict[str, Any]] = []

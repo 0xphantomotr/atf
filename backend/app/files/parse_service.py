@@ -7,11 +7,19 @@ from pypdf import PdfReader
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.files.classifier import classify_document
 from app.files.models import DocumentChunk, FileVersion, ParsedDocument, ProjectFile
+from app.files.ocr import (
+    OCRProcessingError,
+    OCRUnavailableError,
+    ocr_image_bytes,
+    ocr_pdf_pages,
+)
 
 MAX_CHUNK_CHARS = 4_000
-CHUNKING_VERSION = 1
+CHUNKING_VERSION = 2
+OCR_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
 async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUID) -> None:
@@ -29,6 +37,8 @@ async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUI
             parsed = _parse_pdf(file_bytes)
         elif suffix == ".docx":
             parsed = _parse_docx(file_bytes)
+        elif suffix in OCR_IMAGE_EXTENSIONS:
+            parsed = _parse_image(file_bytes, suffix=suffix)
         else:
             file_version.parse_status = "unsupported"
             await session.commit()
@@ -68,9 +78,15 @@ def _completed_parse_status(
     chunks: list[dict[str, Any]],
     page_count: int | None,
 ) -> str:
-    if any(str(chunk.get("text") or "").strip() for chunk in chunks):
+    readable_chunks = [chunk for chunk in chunks if str(chunk.get("text") or "").strip()]
+    if any(
+        dict(chunk.get("metadata") or {}).get("extraction_method") == "tesseract_tsv"
+        for chunk in readable_chunks
+    ):
+        return "parsed_with_ocr"
+    if readable_chunks:
         return "parsed"
-    if suffix == ".pdf" and bool(page_count):
+    if suffix in {".pdf", *OCR_IMAGE_EXTENSIONS} and bool(page_count):
         return "needs_ocr"
     return "empty"
 
@@ -89,18 +105,19 @@ def _load_file_version_bytes(file_version: FileVersion) -> bytes:
             response.release_conn()
 
 
-def _parse_pdf(pdf_bytes: bytes) -> dict:
+def _parse_pdf(pdf_bytes: bytes, *, ocr_enabled: bool | None = None) -> dict:
     reader = PdfReader(BytesIO(pdf_bytes))
-    page_texts: list[str] = []
+    page_texts: dict[int, str] = {}
     chunks: list[dict[str, Any]] = []
-    pages_with_text = 0
+    native_pages_with_text = 0
+    textless_page_numbers: list[int] = []
 
     for index, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
         text = text.strip()
         if text:
-            pages_with_text += 1
-            page_texts.append(f"--- Faqe {index} ---\n{text}")
+            native_pages_with_text += 1
+            page_texts[index] = text
             parts = _split_text(text)
             for part_index, part in enumerate(parts, start=1):
                 chunks.append(
@@ -110,20 +127,156 @@ def _parse_pdf(pdf_bytes: bytes) -> dict:
                         "page_end": index,
                         "metadata": {
                             "source_type": "pdf_page",
+                            "extraction_method": "pypdf",
                             "page_number": index,
                             "part_index": part_index,
                             "part_count": len(parts),
                         },
                     }
                 )
+        else:
+            textless_page_numbers.append(index)
+
+    use_ocr = settings.ocr_enabled if ocr_enabled is None else ocr_enabled
+    ocr_metadata: dict[str, Any] = {
+        "enabled": use_ocr,
+        "pages_requested": len(textless_page_numbers),
+        "pages_with_text": 0,
+        "status": "not_required" if not textless_page_numbers else "not_run",
+    }
+    if textless_page_numbers and use_ocr:
+        try:
+            ocr_result = ocr_pdf_pages(
+                pdf_bytes,
+                page_numbers=textless_page_numbers,
+                languages=settings.ocr_languages,
+                dpi=settings.ocr_dpi,
+                min_confidence=settings.ocr_min_confidence,
+                timeout_seconds=settings.ocr_page_timeout_seconds,
+                max_chunk_chars=MAX_CHUNK_CHARS,
+            )
+            chunks.extend(ocr_result["chunks"])
+            for page in ocr_result["pages"]:
+                if str(page["text"]).strip():
+                    page_texts[int(page["page_number"])] = str(page["text"])
+            ocr_metadata = {
+                key: value for key, value in ocr_result.items() if key not in {"pages", "chunks"}
+            }
+            ocr_metadata["status"] = (
+                "partial" if ocr_result.get("page_errors") else "completed"
+            )
+            ocr_metadata["min_confidence"] = settings.ocr_min_confidence
+        except (OCRUnavailableError, OCRProcessingError) as exc:
+            ocr_metadata.update(
+                {
+                    "status": "unavailable"
+                    if isinstance(exc, OCRUnavailableError)
+                    else "failed",
+                    "reason": str(exc)[:1_000],
+                    "languages": settings.ocr_languages,
+                    "dpi": settings.ocr_dpi,
+                    "min_confidence": settings.ocr_min_confidence,
+                }
+            )
+    elif textless_page_numbers:
+        ocr_metadata["status"] = "disabled"
+
+    chunks.sort(
+        key=lambda chunk: (
+            int(dict(chunk.get("metadata") or {}).get("page_number") or 0),
+            int(dict(chunk.get("metadata") or {}).get("part_index") or 0),
+        )
+    )
+    ocr_pages_with_text = int(ocr_metadata.get("pages_with_text") or 0)
 
     return {
-        "text_content": "\n\n".join(page_texts),
+        "text_content": "\n\n".join(
+            f"--- Faqe {page_number} ---\n{page_texts[page_number]}"
+            for page_number in sorted(page_texts)
+        ),
         "page_count": len(reader.pages),
         "chunks": chunks,
         "metadata": {
-            "parser": "pypdf",
-            "pages_with_text": pages_with_text,
+            "parser": "pypdf+tesseract" if ocr_pages_with_text else "pypdf",
+            "pages_with_text": len(page_texts),
+            "native_pages_with_text": native_pages_with_text,
+            "ocr_pages_with_text": ocr_pages_with_text,
+            "textless_pages_after_extraction": sorted(
+                set(range(1, len(reader.pages) + 1)) - set(page_texts)
+            ),
+            "ocr": ocr_metadata,
+            "chunk_count": len(chunks),
+            "chunking_version": CHUNKING_VERSION,
+        },
+    }
+
+
+def _parse_image(
+    image_bytes: bytes,
+    *,
+    suffix: str,
+    ocr_enabled: bool | None = None,
+) -> dict:
+    use_ocr = settings.ocr_enabled if ocr_enabled is None else ocr_enabled
+    ocr_metadata: dict[str, Any] = {
+        "enabled": use_ocr,
+        "pages_requested": 1,
+        "pages_with_text": 0,
+        "status": "not_run",
+    }
+    chunks: list[dict[str, Any]] = []
+    text_content = ""
+
+    if use_ocr:
+        try:
+            result = ocr_image_bytes(
+                image_bytes,
+                suffix=suffix,
+                languages=settings.ocr_languages,
+                dpi=settings.ocr_dpi,
+                min_confidence=settings.ocr_min_confidence,
+                timeout_seconds=settings.ocr_page_timeout_seconds,
+                max_chunk_chars=MAX_CHUNK_CHARS,
+            )
+            chunks = result["chunks"]
+            for chunk in chunks:
+                chunk["metadata"] = {
+                    **dict(chunk.get("metadata") or {}),
+                    "source_type": "image_ocr",
+                }
+            pages = result["pages"]
+            if pages and str(pages[0]["text"]).strip():
+                text_content = f"--- Faqe 1 ---\n{pages[0]['text']}"
+            ocr_metadata = {
+                key: value for key, value in result.items() if key not in {"pages", "chunks"}
+            }
+            ocr_metadata["status"] = "completed"
+            ocr_metadata["min_confidence"] = settings.ocr_min_confidence
+        except (OCRUnavailableError, OCRProcessingError) as exc:
+            ocr_metadata.update(
+                {
+                    "status": "unavailable"
+                    if isinstance(exc, OCRUnavailableError)
+                    else "failed",
+                    "reason": str(exc)[:1_000],
+                    "languages": settings.ocr_languages,
+                    "dpi": settings.ocr_dpi,
+                    "min_confidence": settings.ocr_min_confidence,
+                }
+            )
+    else:
+        ocr_metadata["status"] = "disabled"
+
+    return {
+        "text_content": text_content,
+        "page_count": 1,
+        "chunks": chunks,
+        "metadata": {
+            "parser": "tesseract",
+            "pages_with_text": 1 if text_content else 0,
+            "native_pages_with_text": 0,
+            "ocr_pages_with_text": 1 if text_content else 0,
+            "ocr": ocr_metadata,
             "chunk_count": len(chunks),
             "chunking_version": CHUNKING_VERSION,
         },

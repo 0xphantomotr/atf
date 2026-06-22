@@ -1,6 +1,7 @@
 from app.agents.llm import LLMReviewError, request_senior_review
 from app.agents.state import AuditGraphState
 from app.core.config import settings
+from app.files.status import is_parsed_status
 
 
 def senior_review(state: AuditGraphState) -> AuditGraphState:
@@ -70,13 +71,14 @@ def _build_review_input(state: AuditGraphState) -> dict:
     unknown_documents = [
         document
         for document in state.get("documents", [])
-        if document.get("parse_status") == "parsed"
+        if is_parsed_status(document.get("parse_status"))
         and document.get("document_type") == "unknown"
     ]
     unsupported_documents = [
         document
         for document in state.get("documents", [])
-        if document.get("parse_status") not in {"parsed", "pending"}
+        if not is_parsed_status(document.get("parse_status"))
+        and document.get("parse_status") != "pending"
     ]
 
     return {

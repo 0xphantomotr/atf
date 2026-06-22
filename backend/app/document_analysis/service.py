@@ -22,6 +22,7 @@ from app.document_analysis.models import (
 )
 from app.files.models import DocumentChunk, FileVersion, ParsedDocument, ProjectFile
 from app.files.parse_service import CHUNKING_VERSION, parse_file_version
+from app.files.status import is_parsed_status
 
 ANALYZER_VERSION = "document-analyzer-v1"
 PROMPT_VERSION = "document-analysis-prompt-v1"
@@ -259,12 +260,12 @@ async def ensure_project_document_analyses(
     analyses: list[DocumentAnalysisRun] = []
     request_pacer = ProviderRequestPacer(ai_settings)
     for file_version in result.scalars():
-        if file_version.parse_status == "parsed":
+        if is_parsed_status(file_version.parse_status):
             chunk_count = await _chunk_count(session, file_version_id=file_version.id)
             if chunk_count == 0:
                 await parse_file_version(session, file_version_id=file_version.id)
                 await session.refresh(file_version)
-        if file_version.parse_status != "parsed":
+        if not is_parsed_status(file_version.parse_status):
             continue
         if await _chunk_count(session, file_version_id=file_version.id) == 0:
             continue
@@ -466,9 +467,9 @@ async def _load_analysis_source(
     if row is None:
         raise DocumentAnalysisError("Versioni i dokumentit të analizueshëm nuk u gjet.")
     file_version, project_file, parsed_document = row
-    if file_version.parse_status != "parsed":
+    if not is_parsed_status(file_version.parse_status):
         raise DocumentAnalysisError(
-            f"Dokumenti {file_version.original_filename} nuk është në gjendjen parsed."
+            f"Dokumenti {file_version.original_filename} nuk ka përfunduar përpunimin e tekstit."
         )
     return file_version, project_file, parsed_document
 

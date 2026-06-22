@@ -1,4 +1,5 @@
 from app.agents.state import AuditGraphState
+from app.files.status import is_parsed_status
 
 
 def classify_documents(state: AuditGraphState) -> AuditGraphState:
@@ -7,14 +8,14 @@ def classify_documents(state: AuditGraphState) -> AuditGraphState:
     classified_documents = [
         document
         for document in documents
-        if document.get("parse_status") == "parsed"
+        if is_parsed_status(document.get("parse_status"))
         and document.get("document_type")
         and document.get("document_type") != "unknown"
     ]
     unknown_documents = [
         document
         for document in documents
-        if document.get("parse_status") == "parsed"
+        if is_parsed_status(document.get("parse_status"))
         and document.get("document_type") == "unknown"
     ]
     state["document_inventory"] = {

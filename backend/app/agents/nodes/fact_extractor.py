@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.agents.state import AuditGraphState
+from app.files.status import is_parsed_status
 
 MAX_FACTS_PER_CATEGORY = 8
 MAX_VALUE_LENGTH = 220
@@ -91,7 +92,7 @@ def extract_project_facts(state: AuditGraphState) -> AuditGraphState:
     documents_with_text = 0
 
     for document in state.get("documents", []):
-        if document.get("parse_status") != "parsed":
+        if not is_parsed_status(document.get("parse_status")):
             continue
 
         parsed_documents += 1

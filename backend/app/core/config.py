@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     openai_max_output_tokens: int = 1800
     ai_senior_review_enabled: bool = True
 
+    ocr_enabled: bool = True
+    ocr_languages: str = "sqi+eng"
+    ocr_dpi: int = Field(default=300, ge=72, le=600)
+    ocr_min_confidence: float = Field(default=30.0, ge=0, le=100)
+    ocr_page_timeout_seconds: int = Field(default=120, ge=10, le=600)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,6 +1,7 @@
 from typing import Any
 
 from app.agents.state import AuditGraphState
+from app.files.status import is_parsed_status
 
 
 VKM_OBLIGATION_GROUPS: tuple[dict[str, Any], ...] = (
@@ -178,7 +179,7 @@ def _present_documents_by_type(
     for document in documents:
         document_type = document.get("document_type")
         if (
-            document.get("parse_status") != "parsed"
+            not is_parsed_status(document.get("parse_status"))
             or not isinstance(document_type, str)
             or document_type == "unknown"
         ):

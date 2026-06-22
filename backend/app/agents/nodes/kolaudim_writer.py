@@ -14,6 +14,7 @@ from app.agents.llm import (
 )
 from app.agents.state import AuditGraphState
 from app.core.config import settings
+from app.files.status import is_parsed_status
 
 APPROX_CHARS_PER_TOKEN = 3
 BUDGET_METADATA_RESERVED_TOKENS = 250
@@ -821,7 +822,7 @@ def _document_evidence(
 def _prioritized_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def sort_key(document: dict[str, Any]) -> tuple[int, int, float, str]:
         document_type = str(document.get("document_type") or "unknown")
-        parse_penalty = 0 if document.get("parse_status") == "parsed" else 5
+        parse_penalty = 0 if is_parsed_status(document.get("parse_status")) else 5
         priority = DOCUMENT_TYPE_PRIORITY.get(document_type, 20)
         confidence = document.get("classification_confidence")
         confidence_value = float(confidence) if isinstance(confidence, int | float) else 0.0

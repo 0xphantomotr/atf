@@ -54,7 +54,7 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
 
 - [x] Unit coverage for parsing, document analysis, dossier consolidation, specialist
   review, model budgeting and Akt generation.
-- [x] Latest complete test run: 79 passed, 1 skipped.
+- [x] Latest complete test run: 91 passed, 1 skipped.
 - [x] `.env`, API keys and local human reference documents excluded from commits.
 
 ## Completed Milestone: Claim-Grounded Finalization
@@ -88,13 +88,16 @@ an unsupported conclusion more convincingly.
 - The public PDF remains a clean Akt Kolaudimi without citations or system terminology.
 - Verification and one correction pass have deterministic termination.
 
-## Next Milestone: OCR For Scanned Evidence
+## Completed Milestone: OCR For Scanned Evidence
 
 ### OCR deliverables
 
-- [ ] Add Albanian-capable OCR for scanned PDFs and images.
-- [ ] Preserve OCR page coordinates and confidence in document chunks.
-- [ ] Allow OCR results to be reviewed and reprocessed independently.
+- [x] Add local Albanian/English Tesseract OCR for scanned PDFs and images.
+- [x] OCR only PDF pages without an extractable text layer.
+- [x] Preserve page coordinates, confidence, DPI, language and engine version in chunks.
+- [x] Mark usable OCR evidence as `parsed_with_ocr` and include it in every analysis stage.
+- [x] Keep page-level OCR failures explicit without discarding successful pages.
+- [x] Expose versioned chunks for OCR review and allow independent reprocessing.
 
 ## Subsequent Improvements
 

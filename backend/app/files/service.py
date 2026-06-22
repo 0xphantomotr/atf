@@ -16,8 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.files.classifier import UNKNOWN_DOCUMENT_TYPE, classify_document
-from app.files.models import FileVersion, ParsedDocument, ProjectFile
+from app.files.models import DocumentChunk, FileVersion, ParsedDocument, ProjectFile
 from app.files.parser import is_supported_filename
+from app.files.status import PARSED_STATUSES, is_parsed_status
 from app.files.storage import ensure_bucket_exists, get_minio_client
 from app.projects.service import get_project
 from app.workers.jobs import parse_file_version
@@ -527,6 +528,51 @@ async def get_file_version(
     return file_version
 
 
+async def reprocess_file_version(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_id: uuid.UUID,
+    version_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> FileVersion:
+    file_version = await get_file_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=version_id,
+        user_id=user_id,
+    )
+    file_version.parse_status = "pending"
+    await session.commit()
+    await session.refresh(file_version)
+    parse_file_version.send(str(file_version.id))
+    return file_version
+
+
+async def list_document_chunks_for_version(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_id: uuid.UUID,
+    version_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> list[DocumentChunk]:
+    await get_file_version(
+        session,
+        project_id=project_id,
+        file_id=file_id,
+        version_id=version_id,
+        user_id=user_id,
+    )
+    result = await session.execute(
+        select(DocumentChunk)
+        .where(DocumentChunk.file_version_id == version_id)
+        .order_by(DocumentChunk.chunk_index)
+    )
+    return list(result.scalars())
+
+
 async def get_parsed_document_for_version(
     session: AsyncSession,
     *,
@@ -694,7 +740,7 @@ def _build_classification_summary(
     for project_file, file_version, parsed_document in rows:
         document_type = parsed_document.document_type if parsed_document else None
         confidence = _classification_confidence(parsed_document)
-        if file_version.parse_status == "parsed" and document_type:
+        if is_parsed_status(file_version.parse_status) and document_type:
             document_type_counts[document_type] += 1
 
         files.append(
@@ -712,7 +758,7 @@ def _build_classification_summary(
     classified_files = sum(document_type_counts.values()) - unknown_files
     return {
         "total_files": len(rows),
-        "parsed_files": status_counts.get("parsed", 0),
+        "parsed_files": sum(status_counts.get(value, 0) for value in PARSED_STATUSES),
         "pending_files": status_counts.get("pending", 0),
         "processing_files": status_counts.get("processing", 0),
         "unsupported_files": status_counts.get("unsupported", 0),

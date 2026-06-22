@@ -1,5 +1,6 @@
 from app.files.classifier import classify_document, classify_document_type
 from app.files.parser import is_supported_filename
+from app.files.status import is_parsed_status
 from app.laws.parser import split_law_articles
 from app.telegram.messages import WELCOME_MESSAGE
 
@@ -8,6 +9,12 @@ def test_supported_filename() -> None:
     assert is_supported_filename("dosja.pdf")
     assert is_supported_filename("dosja.zip")
     assert not is_supported_filename("script.exe")
+
+
+def test_ocr_and_native_parse_statuses_are_usable_evidence() -> None:
+    assert is_parsed_status("parsed")
+    assert is_parsed_status("parsed_with_ocr")
+    assert not is_parsed_status("needs_ocr")
 
 
 def test_basic_classifier_is_conservative() -> None:

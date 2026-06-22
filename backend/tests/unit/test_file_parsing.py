@@ -8,9 +8,12 @@ import pytest
 
 from app.files import parse_service
 from app.files.models import ParsedDocument
+from app.files.ocr import parse_tesseract_tsv
 from app.files.parse_service import (
+    CHUNKING_VERSION,
     MAX_CHUNK_CHARS,
     _completed_parse_status,
+    _parse_image,
     _parse_docx,
     _parse_pdf,
     _replace_document_chunks,
@@ -32,6 +35,22 @@ def test_parse_completion_status_distinguishes_readable_and_empty_files() -> Non
         == "parsed"
     )
     assert _completed_parse_status(suffix=".docx", chunks=[], page_count=None) == "empty"
+
+
+def test_parse_completion_status_marks_ocr_text_explicitly() -> None:
+    assert (
+        _completed_parse_status(
+            suffix=".pdf",
+            chunks=[
+                {
+                    "text": "Tekst i lexuar me OCR",
+                    "metadata": {"extraction_method": "tesseract_tsv"},
+                }
+            ],
+            page_count=1,
+        )
+        == "parsed_with_ocr"
+    )
 
 
 def test_split_text_preserves_all_content_with_bounded_chunks() -> None:
@@ -56,7 +75,7 @@ def test_parse_pdf_creates_page_aware_chunks(monkeypatch: pytest.MonkeyPatch) ->
     )
     monkeypatch.setattr(parse_service, "PdfReader", lambda _: reader)
 
-    parsed = _parse_pdf(b"synthetic-pdf")
+    parsed = _parse_pdf(b"synthetic-pdf", ocr_enabled=False)
 
     assert parsed["page_count"] == 3
     assert parsed["metadata"]["pages_with_text"] == 2
@@ -69,6 +88,145 @@ def test_parse_pdf_creates_page_aware_chunks(monkeypatch: pytest.MonkeyPatch) ->
     assert len(second_page_chunks) > 1
     assert " ".join(chunk["text"] for chunk in second_page_chunks) == second_page
     assert all(len(chunk["text"]) <= MAX_CHUNK_CHARS for chunk in parsed["chunks"])
+
+
+def test_parse_pdf_ocr_only_textless_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = SimpleNamespace(
+        pages=[
+            SimpleNamespace(extract_text=lambda: "Tekst origjinal"),
+            SimpleNamespace(extract_text=lambda: ""),
+        ]
+    )
+    ocr_result = {
+        "pages": [
+            {
+                "page_number": 2,
+                "text": "Tekst nga skanimi",
+                "chunks": [],
+                "accepted_word_count": 3,
+                "rejected_word_count": 0,
+            }
+        ],
+        "chunks": [
+            {
+                "text": "Tekst nga skanimi",
+                "page_start": 2,
+                "page_end": 2,
+                "metadata": {
+                    "source_type": "pdf_ocr",
+                    "extraction_method": "tesseract_tsv",
+                    "page_number": 2,
+                    "part_index": 1,
+                },
+            }
+        ],
+        "engine": "tesseract",
+        "engine_version": "tesseract 5",
+        "languages": "sqi+eng",
+        "dpi": 300,
+        "pages_requested": 1,
+        "pages_with_text": 1,
+        "accepted_word_count": 3,
+        "rejected_word_count": 0,
+    }
+    ocr_mock = MagicMock(return_value=ocr_result)
+    monkeypatch.setattr(parse_service, "PdfReader", lambda _: reader)
+    monkeypatch.setattr(parse_service, "ocr_pdf_pages", ocr_mock)
+
+    parsed = _parse_pdf(b"synthetic-pdf", ocr_enabled=True)
+
+    assert [chunk["page_start"] for chunk in parsed["chunks"]] == [1, 2]
+    assert parsed["metadata"]["native_pages_with_text"] == 1
+    assert parsed["metadata"]["ocr_pages_with_text"] == 1
+    assert parsed["metadata"]["ocr"]["status"] == "completed"
+    assert "Tekst origjinal" in parsed["text_content"]
+    assert "Tekst nga skanimi" in parsed["text_content"]
+    assert ocr_mock.call_args.kwargs["page_numbers"] == [2]
+
+
+def test_parse_image_uses_ocr_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        parse_service,
+        "ocr_image_bytes",
+        lambda *_args, **_kwargs: {
+            "pages": [
+                {
+                    "page_number": 1,
+                    "text": "Leje ndërtimi nr. 12",
+                    "chunks": [],
+                    "accepted_word_count": 4,
+                    "rejected_word_count": 0,
+                }
+            ],
+            "chunks": [
+                {
+                    "text": "Leje ndërtimi nr. 12",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "metadata": {
+                        "source_type": "pdf_ocr",
+                        "extraction_method": "tesseract_tsv",
+                    },
+                }
+            ],
+            "engine": "tesseract",
+            "engine_version": "tesseract 5",
+            "languages": "sqi+eng",
+            "dpi": 300,
+            "pages_requested": 1,
+            "pages_with_text": 1,
+            "accepted_word_count": 4,
+            "rejected_word_count": 0,
+        },
+    )
+
+    parsed = _parse_image(b"image", suffix=".png", ocr_enabled=True)
+
+    assert parsed["chunks"][0]["metadata"]["source_type"] == "image_ocr"
+    assert parsed["chunks"][0]["metadata"]["extraction_method"] == "tesseract_tsv"
+    assert parsed["metadata"]["ocr_pages_with_text"] == 1
+
+
+def test_tesseract_tsv_preserves_coordinates_and_confidence() -> None:
+    tsv = "\n".join(
+        [
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\t"
+            "width\theight\tconf\ttext",
+            "1\t1\t0\t0\t0\t0\t0\t0\t1200\t1600\t-1\t",
+            "5\t1\t1\t1\t1\t1\t100\t200\t60\t30\t95\tAkt",
+            "5\t1\t1\t1\t1\t2\t170\t200\t160\t30\t85\tkolaudimi",
+            "5\t1\t1\t1\t2\t1\t100\t250\t120\t30\t90\tObjekti",
+            "5\t1\t1\t1\t2\t2\t230\t250\t80\t30\t10\tbllokuar",
+        ]
+    )
+
+    result = parse_tesseract_tsv(
+        tsv,
+        page_number=3,
+        languages="sqi+eng",
+        dpi=300,
+        min_confidence=30,
+        max_chunk_chars=MAX_CHUNK_CHARS,
+    )
+
+    assert result["text"] == "Akt kolaudimi\nObjekti"
+    assert result["accepted_word_count"] == 3
+    assert result["rejected_word_count"] == 1
+    chunk = result["chunks"][0]
+    assert chunk["page_start"] == 3
+    assert chunk["metadata"]["ocr_confidence"] == 88.38
+    assert chunk["metadata"]["bbox"] == {
+        "left": 100,
+        "top": 200,
+        "width": 230,
+        "height": 80,
+    }
+    assert chunk["metadata"]["coordinate_space"] == {
+        "unit": "pixel",
+        "width": 1200,
+        "height": 1600,
+        "dpi": 300,
+    }
 
 
 def test_parse_docx_preserves_paragraph_and_table_coordinates() -> None:
@@ -147,4 +305,6 @@ def test_replace_document_chunks_deletes_old_rows_and_restarts_indexes() -> None
     assert [chunk.chunk_index for chunk in stored] == [0, 1]
     assert [chunk.page_start for chunk in stored] == [1, 2]
     assert all(chunk.project_id == project_id for chunk in stored)
-    assert all(chunk.chunk_metadata["chunking_version"] == 1 for chunk in stored)
+    assert all(
+        chunk.chunk_metadata["chunking_version"] == CHUNKING_VERSION for chunk in stored
+    )

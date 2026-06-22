@@ -20,6 +20,7 @@ from app.document_analysis.service import (
 )
 from app.files.classifier import UNKNOWN_DOCUMENT_TYPE, classify_document
 from app.files.models import FileVersion, ParsedDocument, ProjectFile
+from app.files.status import is_parsed_status
 from app.laws.models import LawArticle, LawDocument
 from app.projects.models import Project, ProjectMember
 from app.reports.schemas import (
@@ -1019,7 +1020,7 @@ def _document_summary(current_files: list[CurrentFileSnapshot]) -> ReportDocumen
         file.document_type
         for file in current_files
         if (
-            file.parse_status == "parsed"
+            is_parsed_status(file.parse_status)
             and file.document_type
             and file.document_type != UNKNOWN_DOCUMENT_TYPE
         )
@@ -1050,7 +1051,7 @@ def _document_summary(current_files: list[CurrentFileSnapshot]) -> ReportDocumen
 
 
 def _count_parsed_files(current_files: list[CurrentFileSnapshot]) -> int:
-    return sum(1 for file in current_files if file.parse_status == "parsed")
+    return sum(1 for file in current_files if is_parsed_status(file.parse_status))
 
 
 def _count_classified_files(current_files: list[CurrentFileSnapshot]) -> int:
@@ -1058,7 +1059,7 @@ def _count_classified_files(current_files: list[CurrentFileSnapshot]) -> int:
         1
         for file in current_files
         if (
-            file.parse_status == "parsed"
+            is_parsed_status(file.parse_status)
             and file.document_type
             and file.document_type != UNKNOWN_DOCUMENT_TYPE
         )
@@ -1069,7 +1070,8 @@ def _unknown_filenames(current_files: list[CurrentFileSnapshot]) -> list[str]:
     return [
         file.original_filename
         for file in current_files
-        if file.parse_status == "parsed" and file.document_type == UNKNOWN_DOCUMENT_TYPE
+        if is_parsed_status(file.parse_status)
+        and file.document_type == UNKNOWN_DOCUMENT_TYPE
     ]
 
 
@@ -1298,7 +1300,7 @@ def _found_document_types(current_files: list[CurrentFileSnapshot]) -> set[str]:
     found_types: set[str] = set()
     for current_file in current_files:
         if (
-            current_file.parse_status != "parsed"
+            not is_parsed_status(current_file.parse_status)
             or not current_file.document_type
             or current_file.document_type == UNKNOWN_DOCUMENT_TYPE
         ):
