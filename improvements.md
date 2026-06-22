@@ -1,335 +1,156 @@
 # Akt Kolaudimi Improvement Roadmap
 
-## 1. Objective
-
-Move the current system from excerpt-based Akt generation to a complete, traceable
-technical-folder analysis pipeline.
-
-The target workflow must:
-
-- process every supported document without silent omission;
-- analyse complete documents across multiple chunks when required;
-- preserve source provenance for every material fact;
-- consolidate document-level evidence into one project dossier;
-- generate a clean professional Akt-Kolaudimi;
-- verify and correct unsupported or conflicting claims before rendering;
-- remain dynamic for unrelated projects and technical folders;
-- reuse completed analysis when a file version has not changed.
-
-## 2. Current Baseline
-
-The current implementation already provides:
-
-- Telegram project creation and project selection;
-- ZIP and individual file upload;
-- immutable file versions in PostgreSQL and MinIO;
-- asynchronous parsing and review jobs through Dramatiq and Redis;
-- PDF and DOCX text extraction;
-- deterministic document classification;
-- VKM 610/2022 law and rule loading;
-- a LangGraph workflow for dossier construction and Akt generation;
-- user-owned OpenAI, Gemini and Groq credentials;
-- dynamic model token budgets;
-- Gemini-generated structured Akt narrative;
-- deterministic claim checks;
-- JSON and PDF output storage and Telegram delivery.
-
-The main limitation is that the final AI writer receives selected excerpts rather than
-a persistent analysis of every complete document.
-
-## 3. Stabilize the Baseline
-
-Before changing the architecture:
-
-1. Run the complete unit test suite.
-2. Review the current uncommitted diff.
-3. Commit the professional dossier, AI writer, claim verifier, clean PDF and Telegram
-   report-selection changes as one checkpoint.
-4. Keep `.env`, API keys and local reference documents outside version control.
-
-Current progress:
-
-- [x] Professional Akt baseline committed and pushed.
-- [x] PDF page chunks implemented.
-- [x] DOCX paragraph and table chunks implemented.
-- [x] Chunk replacement and uniqueness constraints implemented.
-- [ ] Existing parsed documents backfilled with chunks.
-- [ ] XLSX, legacy DOC and MPP ingestion implemented.
-- [x] Persistent per-document AI analysis implemented.
-
-## 4. Complete Document Ingestion
-
-Every imported file must end in one explicit state:
-
-- `parsed`;
-- `parsed_with_ocr`;
-- `unsupported`, with a reason;
-- `failed`, with a reason.
-
-Required parser work:
-
-- create page-aware chunks for PDF files;
-- create paragraph- and table-aware chunks for DOCX files;
-- extract worksheets, rows and important formulas from XLSX files;
-- add a controlled conversion path for legacy `.doc` files;
-- extract tasks, dates, dependencies and milestones from `.mpp` schedules;
-- retain page, table, sheet and paragraph coordinates in chunk metadata;
-- add OCR for scanned PDFs and images in a later iteration if still deferred.
-
-The existing `document_chunks` table should become the source of document evidence.
-Chunk boundaries must preserve enough context for technical and legal interpretation.
-
-## 5. Persistent Per-Document Analysis
-
-Analyse each file version independently before project-level synthesis. Long documents
-must be processed through all their chunks across multiple model calls when necessary.
-
-Persist an immutable analysis run containing:
-
-- file version and SHA-256 hash;
-- provider and model;
-- prompt and schema version;
-- analysis status and error details;
-- token usage and timestamps;
-- structured document summary;
-- extracted claims and source references.
-
-The document analysis schema should cover:
-
-- document purpose and authoritative role;
-- project identity and location;
-- involved parties and professional roles;
-- permits, protocols, licenses and property references;
-- dates and chronology events;
-- contracts, quantities and economic values;
-- technical parameters and design data;
-- construction phases and executed works;
-- hidden works and control acts;
-- materials, tests and quality certificates;
-- declarations, reservations and conclusions;
-- internal conflicts and uncertain values.
-
-Every extracted claim should retain:
-
-- normalized field name;
-- original value;
-- normalized value;
-- source file version;
-- page, paragraph, table, sheet or chunk reference;
-- short supporting excerpt;
-- confidence and extraction method.
-
-Unchanged file versions should reuse a compatible completed analysis instead of making
-new API requests.
-
-## 6. Project Dossier Consolidation
-
-Build the professional project dossier from persisted document analyses rather than
-directly from truncated raw text.
-
-The dossier reducer should produce:
-
-- canonical project facts;
-- stakeholder and professional register;
-- property, permit and license register;
-- project parameters;
-- construction chronology;
-- technical-work register;
-- material and test register;
-- contractual and economic summary;
-- conflicts and alternative values;
-- evidence coverage by professional section.
-
-Canonical values should be selected using generic criteria:
-
-- document authority;
-- extraction confidence;
-- classification confidence;
-- corroboration across independent documents;
-- document-to-project relationship;
-- recency where legally relevant.
-
-No project-specific names, values, filenames or expected conclusions may be embedded in
-production logic.
-
-Current progress:
-
-- [x] Build canonical professional registers from persisted, verified claims.
-- [x] Match analyses to immutable current file versions and SHA-256 hashes.
-- [x] Preserve analysis, claim, file-version and chunk provenance in register entries.
-- [x] Rank evidence by authority, extraction confidence and corroboration.
-- [x] Calculate chronology, economic and analysis-coverage integrity results.
-- [x] Exclude style references, foreign-project evidence and unverified excerpts.
-- [x] Feed consolidated registers to section planning and final Akt generation.
-- [x] Fit consolidated writer input dynamically to the selected model budget.
-
-## 7. Specialist Review Stages
-
-Create structured specialist memoranda before drafting the final Akt:
-
-- legal and administrative documentation;
-- project parameters, permits and property data;
-- chronology, deadlines and completion evidence;
-- structural phases and hidden works;
-- materials, tests and quality evidence;
-- contracts, quantities and economic data.
-
-These stages should consume document analyses and canonical evidence. They should not
-independently invent project facts or rely on one large raw-document prompt.
-
-Current progress:
-
-- [x] Prepare six domain-specific evidence packets from consolidated registers.
-- [x] Generate six specialist memoranda through one bounded structured AI call.
-- [x] Require and validate domain-scoped evidence IDs for every AI statement.
-- [x] Discard uncited, invented and cross-domain specialist statements.
-- [x] Preserve file-version and chunk provenance on normalized memorandum statements.
-- [x] Replace the redundant general senior-review call for successful Akt reviews.
-- [x] Route specialist context into section planning and final Akt generation.
-- [x] Preserve deterministic evidence packets when AI review is skipped or fails.
-
-## 8. Akt Generation And Correction
-
-The final writer should receive:
-
-- the canonical project dossier;
-- specialist memoranda;
-- verified VKM 610 references;
-- section requirements;
-- material conflicts and qualifications;
-- source-backed evidence summaries.
-
-The public output must remain a clean professional Akt-Kolaudimi, not an audit report,
-checklist or internal diagnostic document.
-
-Use a bounded correction workflow:
-
-```text
-draft
--> claim verification
--> correction instructions
--> revised draft
--> final verification
--> PDF rendering
-```
-
-Allow no more than one or two correction iterations. A correction should target only
-unsupported, contradictory or malformed sections.
-
-## 9. Claim Verification
-
-Verify every material public claim against the consolidated evidence store.
-
-Checks should include:
-
-- canonical value consistency;
-- source existence;
-- source-to-project relationship;
-- legal-reference validity;
-- chronology consistency;
-- arithmetic consistency for economic values;
-- unsupported physical-inspection statements;
-- placeholders and internal system terminology;
-- duplicated or contradictory conclusions.
-
-Human-review metadata and undefined optional facts are valid outcomes. They should not
-be treated automatically as generation failures.
-
-## 10. Reproducibility And Job Snapshots
-
-Each generation job should permanently record:
-
-- project file-version IDs and hashes;
-- document-analysis IDs;
-- law-document and rule versions;
-- provider and model;
-- prompt and schema versions;
-- token budgets and usage;
-- complete agent trace;
-- correction attempts;
-- output hashes.
-
-A running job must use its original input snapshot even if the user uploads a newer file
-version while generation is in progress.
-
-## 11. Rate Limits And Resumability
-
-Per-document analysis will require multiple API calls. The worker pipeline must:
-
-- respect provider and model request limits;
-- checkpoint every completed document and chunk;
-- retry transient failures with bounded backoff;
-- resume without repeating successful work;
-- expose meaningful progress to `/status`;
-- allow failed documents to be retried independently;
-- avoid logging or persisting decrypted API keys.
-
-## 12. Testing Strategy
-
-Add tests at four levels.
-
-### Unit Tests
-
-- parser and chunk boundaries;
-- document-analysis schema validation;
-- claim normalization and source references;
-- canonical fact ranking;
-- conflict detection;
-- token-budget allocation;
-- correction-loop termination.
-
-### Integration Tests
-
-- upload to parse to chunks;
-- chunks to document analysis;
-- cached analysis reuse;
-- project dossier consolidation;
-- job input snapshot isolation;
-- JSON and PDF output persistence.
-
-### Dynamic Project Tests
-
-Use at least two unrelated technical folders and verify:
-
-- no names, values or evidence cross project boundaries;
-- every public project fact comes from that project's file versions;
-- reference examples influence style only;
-- regeneration after a file update uses the new version only.
-
-### Professional Acceptance Tests
-
-Maintain expected evidence fixtures rather than fixed AI prose. Validate:
-
-- required factual coverage;
-- chronology and economic consistency;
-- source traceability;
-- professional section coverage;
-- absence of checklist and internal workflow language.
-
-## 13. Implementation Order
-
-1. Stabilize and commit the current baseline.
-2. Populate `document_chunks` during parsing.
-3. Add persistent document-analysis runs and claims.
-4. Implement resumable per-document AI analysis.
-5. Rebuild the professional dossier from persisted claims.
-6. Add specialist memoranda.
-7. Add the bounded writer correction loop.
-8. Add full provenance and reproducibility metadata.
-9. Validate against multiple unrelated technical folders.
-10. Polish PDF pagination and typography after evidence quality is stable.
-
-## 14. Completion Criteria
-
-This improvement phase is complete when:
-
-- no supported file is silently ignored;
-- every parsed page, paragraph, table or sheet is represented by chunks;
-- every document is fully analysed or explicitly reports why it was not;
-- every material Akt claim has source provenance;
+Last updated: 2026-06-22
+
+## Objective
+
+Generate a professional Akt Kolaudimi from any supported technical folder while keeping
+every material conclusion traceable to that project's evidence. The public PDF must stay
+clean and professional; provenance, uncertainty and agent diagnostics remain internal.
+
+## Completed
+
+### Platform and workflow
+
+- [x] Telegram project creation, selection, upload, status and report delivery.
+- [x] Immutable file versions in PostgreSQL and objects in MinIO.
+- [x] Dramatiq and Redis background parsing and generation jobs.
+- [x] User-managed OpenAI, Gemini and Groq credentials and model selection.
+- [x] VKM 610/2022 ingestion, rules and retrieval.
+- [x] LangGraph workflow for evidence processing and Akt generation.
+
+### Document ingestion and analysis
+
+- [x] PDF page-aware chunks.
+- [x] DOCX paragraph- and table-aware chunks.
+- [x] Chunk replacement, uniqueness and source coordinates.
+- [x] Textless scanned PDFs marked `needs_ocr` instead of treated as parsed text.
+- [x] Persistent per-file-version AI analysis runs, batches and claims.
+- [x] Analysis cache keyed by immutable file version, model and schema versions.
+- [x] Resume from completed document-analysis batches.
+- [x] Structured provider output, token accounting and malformed-response retry.
+- [x] Claim provenance linking analysis, file version and source chunk.
+
+### Project-level professional analysis
+
+- [x] Canonical project facts built from persisted document claims.
+- [x] Stakeholder, permit, chronology, technical, quality and economic registers.
+- [x] Evidence ranking by authority, confidence and corroboration.
+- [x] Conflict retention instead of silently selecting every disputed value.
+- [x] Exclusion of foreign-project and unverified style-reference evidence.
+- [x] Dynamic input fitting based on the selected model's context budget.
+
+### Specialist and final generation stages
+
+- [x] Six evidence-scoped specialist review domains.
+- [x] Specialist statements validated against allowed evidence IDs.
+- [x] Specialist memoranda passed into section planning and final drafting.
+- [x] Clean Akt Kolaudimi PDF without checklist or internal audit sections.
+- [x] Basic deterministic checks for placeholders, internal terminology, canonical facts
+  and conflicting alternatives.
+- [x] Failed specialist calls preserve deterministic evidence packets.
+
+### Verification baseline
+
+- [x] Unit coverage for parsing, document analysis, dossier consolidation, specialist
+  review, model budgeting and Akt generation.
+- [x] Latest complete test run: 79 passed, 1 skipped.
+- [x] `.env`, API keys and local human reference documents excluded from commits.
+
+## Next Milestone: Claim-Grounded Finalization
+
+This is the highest-priority improvement. The current verifier checks the draft globally,
+but it does not prove every material sentence. A stronger model alone can therefore write
+an unsupported conclusion more convincingly.
+
+### Deliverables
+
+- [ ] Make the writer return an internal claim ledger alongside the clean narrative.
+- [ ] Record for every material claim: section, claim type, evidence IDs, confidence and
+  whether it is a documented fact, professional inference or qualification.
+- [ ] Resolve every evidence ID against the current job's project and file-version
+  snapshot.
+- [ ] Reject unknown, cross-project, superseded or non-existent evidence references.
+- [ ] Require direct evidence for completion, conformity, final measurement, testing and
+  suitability-for-use conclusions.
+- [ ] Detect claims that imply a physical inspection when the folder only proves document
+  review.
+- [ ] Produce targeted correction instructions for unsupported or contradictory claims.
+- [ ] Run at most one correction pass, then verify the revised draft again.
+- [ ] Render only the verified revision; keep the evidence ledger internal.
+- [ ] Never return an older successful PDF when the latest generation fails.
+
+### Acceptance Criteria
+
+- Every material factual statement in the final Akt resolves to current-project evidence.
+- Professional inferences are clearly separated from documented facts internally.
+- Missing evidence creates a qualification, not an invented positive conclusion.
+- The public PDF remains a clean Akt Kolaudimi without citations or system terminology.
+- Verification and one correction pass have deterministic termination.
+
+## Subsequent Improvements
+
+### OCR and richer ingestion
+
+- [ ] Add Albanian-capable OCR for scanned PDFs and images.
+- [ ] Preserve OCR page coordinates and confidence in document chunks.
+- [ ] Allow OCR results to be reviewed and reprocessed independently.
+- [ ] Add XLSX worksheet, row and formula extraction.
+- [ ] Add controlled conversion and extraction for legacy `.doc` files.
+- [ ] Add MPP task, dependency, milestone and deadline extraction.
+- [ ] Backfill chunks for files parsed before chunk persistence was introduced.
+
+### Model routing and quota efficiency
+
+- [ ] Support model selection by stage instead of one model for the entire workflow.
+- [ ] Use a cost-efficient model for document extraction and a stronger reasoning model
+  for specialist synthesis, final drafting and correction.
+- [ ] Estimate calls and token volume before starting a full-folder analysis.
+- [ ] Enforce provider-specific RPM, TPM and daily-request limits.
+- [ ] Respect provider `Retry-After` values and pause jobs instead of exhausting retries.
+- [ ] Resume quota-limited jobs without repeating completed files or batches.
+- [ ] Expose document-level progress and the next retry time through `/status`.
+
+### Reproducibility
+
+- [ ] Persist each job's exact file-version and hash snapshot.
+- [ ] Persist analysis IDs, law/rule versions, provider, model and prompt/schema versions.
+- [ ] Persist stage token budgets, usage, correction attempts and final output hashes.
+- [ ] Ensure uploads made during a running job cannot change that job's evidence set.
+
+### Validation against unrelated projects
+
+- [ ] Maintain at least two unrelated technical-folder fixtures.
+- [ ] Prove that names, values and evidence cannot cross project boundaries.
+- [ ] Verify that unchanged files reuse analysis and updated files use only the new version.
+- [ ] Evaluate factual coverage and evidence quality rather than fixed AI wording.
+- [ ] Compare generated Akts against professional acceptance criteria and human examples.
+
+### Output polish
+
+- [ ] Improve PDF pagination, table splitting and signature-page handling.
+- [ ] Normalize Albanian labels for project types and construction stages.
+- [ ] Add optional organization branding without changing evidentiary content.
+
+## Implementation Order
+
+1. Claim-grounded finalization and one bounded correction pass.
+2. OCR for scanned PDF evidence.
+3. Stage-specific model routing and quota-aware resumability.
+4. XLSX, legacy DOC and MPP ingestion plus chunk backfill.
+5. Reproducible job snapshots and multi-project acceptance tests.
+6. Final PDF typography and pagination polish.
+
+## Completion Criteria
+
+This roadmap is complete when:
+
+- no supported file is silently omitted;
+- every document is analysed or has an explicit machine-readable reason why it was not;
+- every material Akt claim has current-project provenance;
+- unsupported evidence produces qualifications rather than invented conclusions;
+- transient and quota failures resume without repeating completed work;
 - unrelated projects cannot contaminate each other;
-- unchanged documents reuse cached analyses;
-- transient failures can resume safely;
 - the final PDF contains only the professional Akt;
-- a failed generation never exposes an output from an older job;
+- failed generation never exposes output from an older job;
 - the same evidence produces a reproducible dossier regardless of narrative wording.
