@@ -4,6 +4,13 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
+from app.agents.dossier_consolidation import (
+    REGISTER_CHRONOLOGY,
+    REGISTER_MATERIALS,
+    REGISTER_TECHNICAL,
+    canonical_field_name,
+    consolidate_project_registers,
+)
 from app.agents.state import AuditGraphState
 
 PLACEHOLDER_PATTERN = re.compile(r"(?:\?{2,}|_{3,}|\.{5,}|\bxxx\b|\btodo\b)", re.I)
@@ -243,24 +250,6 @@ CORE_FIELDS = (
 )
 PROJECT_ANCHOR_FIELDS = ("object_name", "location", "investor", "contractor")
 
-ANALYSIS_FIELD_ALIASES = {
-    "project_name": "object_name",
-    "project_title": "object_name",
-    "object": "object_name",
-    "object_location": "location",
-    "project_location": "location",
-    "developer": "investor",
-    "builder": "contractor",
-    "construction_company": "contractor",
-    "permit_number": "construction_permit_number",
-    "permit_date": "construction_permit_date",
-    "construction_start_date": "start_date",
-    "works_start_date": "start_date",
-    "construction_completion_date": "completion_date",
-    "works_completion_date": "completion_date",
-}
-
-
 def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
     state.setdefault("agent_trace", []).append("professional_dossier")
     candidates: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -268,11 +257,17 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
     chronology: list[dict[str, Any]] = []
     technical_observations: list[dict[str, Any]] = []
     style_references: list[dict[str, Any]] = []
+    analyses = state.get("document_analyses", [])
+    has_persisted_analyses = isinstance(analyses, list) and bool(analyses)
 
     for document in state.get("documents", []):
         if not isinstance(document, dict):
             continue
-        record, new_chronology, observations = _analyse_document(document, candidates)
+        record, new_chronology, observations = _analyse_document(
+            document,
+            candidates,
+            extract_excerpt_facts=not has_persisted_analyses,
+        )
         document_records.append(record)
         chronology.extend(new_chronology)
         technical_observations.extend(observations)
@@ -291,7 +286,12 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
         candidates,
         document_records,
     )
-    _add_legacy_fact_candidates(state.get("extracted_facts", {}), candidates, document_records)
+    if not has_persisted_analyses:
+        _add_legacy_fact_candidates(
+            state.get("extracted_facts", {}),
+            candidates,
+            document_records,
+        )
     initial_facts, _ = _resolve_canonical_facts(candidates)
     project_relations = _assign_project_relations(
         document_records,
@@ -299,6 +299,18 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
         initial_facts,
     )
     canonical_facts, conflicts = _resolve_canonical_facts(candidates)
+    consolidation = consolidate_project_registers(
+        analyses=analyses,
+        documents=state.get("documents", []),
+        document_records=document_records,
+        canonical_facts=canonical_facts,
+    )
+    registers = consolidation["registers"]
+    if has_persisted_analyses:
+        chronology = list(registers[REGISTER_CHRONOLOGY])
+        technical_observations = list(registers[REGISTER_TECHNICAL]) + list(
+            registers[REGISTER_MATERIALS]
+        )
     chronology = _deduplicate_chronology(
         [
             event
@@ -318,6 +330,10 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
 
     state["professional_dossier"] = {
         "canonical_facts": canonical_facts,
+        "registers": registers,
+        "economic_summary": consolidation["economic_summary"],
+        "evidence_coverage": consolidation["evidence_coverage"],
+        "integrity_issues": consolidation["integrity_issues"],
         "conflicts": conflicts,
         "chronology": chronology,
         "technical_observations": technical_observations[:80],
@@ -347,6 +363,8 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
             "conflict_count": len(conflicts),
             "chronology_event_count": len(chronology),
             "missing_core_field_count": len(missing_core_fields),
+            "register_entry_count": sum(len(items) for items in registers.values()),
+            "integrity_issue_count": len(consolidation["integrity_issues"]),
         },
         "method": (
             "Nxjerrje sipas llojit të dokumentit, renditje e autoritetit të burimit, "
@@ -359,6 +377,8 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
 def _analyse_document(
     document: dict[str, Any],
     candidates: dict[str, list[dict[str, Any]]],
+    *,
+    extract_excerpt_facts: bool = True,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     filename = str(document.get("original_filename") or "Dokument pa emër")
     document_type = str(document.get("document_type") or "unknown")
@@ -369,7 +389,7 @@ def _analyse_document(
     lines = _lines(text)
     before_counts = {field: len(items) for field, items in candidates.items()}
 
-    if parse_status == "parsed" and text:
+    if extract_excerpt_facts and parse_status == "parsed" and text:
         for line in lines:
             _extract_labeled_values(line, document, candidates, style_reference)
             _extract_permit_values(line, document, candidates, style_reference)
@@ -385,14 +405,24 @@ def _analyse_document(
         for field, items in candidates.items()
         if len(items) > before_counts.get(field, 0)
     )
-    chronology = _document_chronology(document, lines, style_reference)
-    observations = _technical_observations(document, lines, style_reference)
+    chronology = (
+        _document_chronology(document, lines, style_reference)
+        if extract_excerpt_facts
+        else []
+    )
+    observations = (
+        _technical_observations(document, lines, style_reference)
+        if extract_excerpt_facts
+        else []
+    )
     section = SECTION_BY_DOCUMENT_TYPE.get(document_type)
     if document_type in CONTROL_ACT_TYPES or document_type in PHASE_BY_DOCUMENT_TYPE:
         section = "execution_and_chronology"
 
     return (
         {
+            "file_version_id": document.get("version_id"),
+            "file_sha256": document.get("sha256_hash"),
             "filename": filename,
             "document_type": document_type,
             "parse_status": parse_status,
@@ -875,8 +905,14 @@ def _add_persisted_analysis_candidates(
         for document in documents
         if isinstance(document, dict) and document.get("version_id")
     }
+    records_by_version = {
+        str(record.get("file_version_id") or ""): record
+        for record in document_records
+        if record.get("file_version_id")
+    }
     records_by_filename = {
-        str(record.get("filename") or ""): record for record in document_records
+        str(record.get("filename") or ""): record
+        for record in document_records
     }
     added = 0
 
@@ -887,7 +923,9 @@ def _add_persisted_analysis_candidates(
         if not isinstance(document, dict):
             continue
         filename = str(document.get("original_filename") or "")
-        record = records_by_filename.get(filename)
+        record = records_by_version.get(
+            str(analysis.get("file_version_id") or "")
+        ) or records_by_filename.get(filename)
         if record is None or record.get("role") in {"style_reference", "unreadable"}:
             continue
         claims = analysis.get("claims")
@@ -904,8 +942,7 @@ def _add_persisted_analysis_candidates(
             ]
             if not verified_evidence:
                 continue
-            raw_field = str(claim.get("field_name") or "").strip().lower()
-            field = ANALYSIS_FIELD_ALIASES.get(raw_field, raw_field)
+            field = canonical_field_name(claim.get("field_name"))
             value = str(claim.get("original_value") or "").strip()
             if not field or not value or PLACEHOLDER_PATTERN.search(value):
                 continue
@@ -936,6 +973,7 @@ def _add_persisted_analysis_candidates(
                     "evidence": snippet[:300],
                     "source_chunk_id": evidence.get("chunk_id"),
                     "source_chunk_index": evidence.get("chunk_index"),
+                    "source_file_version_id": analysis.get("file_version_id"),
                     "analysis_run_id": analysis.get("analysis_run_id"),
                     "style_reference": False,
                 }
@@ -1049,7 +1087,7 @@ def _assign_project_relations(
                     conflicts += 1
             if matches >= 2 or (matches >= 1 and conflicts == 0):
                 relation = "target_project"
-            elif conflicts:
+            elif conflicts >= 2:
                 relation = "foreign_project_reference"
                 record["role"] = "foreign_project_reference"
                 record["authority_score"] = 0.1

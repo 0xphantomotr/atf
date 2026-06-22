@@ -19,9 +19,19 @@ def check_professional_consistency(state: AuditGraphState) -> AuditGraphState:
     state.setdefault("agent_trace", []).append("consistency_checker")
     issues: list[dict[str, Any]] = []
 
-    facts = state.get("extracted_facts", {}).get("categories", {})
-    if isinstance(facts, dict):
-        issues.extend(_fact_consistency_issues(facts))
+    dossier = state.get("professional_dossier", {})
+    dossier_summary = dossier.get("summary", {}) if isinstance(dossier, dict) else {}
+    has_persisted_analysis = (
+        isinstance(dossier_summary, dict)
+        and int(dossier_summary.get("persisted_analysis_count") or 0) > 0
+    )
+    if has_persisted_analysis:
+        issues.extend(_dossier_conflict_issues(dossier))
+        issues.extend(_dossier_integrity_issues(dossier))
+    else:
+        facts = state.get("extracted_facts", {}).get("categories", {})
+        if isinstance(facts, dict):
+            issues.extend(_fact_consistency_issues(facts))
 
     issues.extend(_placeholder_issues(state.get("documents", [])))
     issues.extend(_document_parse_issues(state.get("documents", [])))
@@ -43,6 +53,46 @@ def check_professional_consistency(state: AuditGraphState) -> AuditGraphState:
     if any(issue["severity"] in {"critical", "major"} for issue in issues):
         state["needs_human_review"] = True
     return state
+
+
+def _dossier_conflict_issues(dossier: dict[str, Any]) -> list[dict[str, Any]]:
+    conflicts = dossier.get("conflicts")
+    if not isinstance(conflicts, list):
+        return []
+    return [
+        {
+            "code": f"DOSSIER-CONFLICT-{str(conflict.get('field') or 'FACT').upper()}",
+            "severity": "notice",
+            "title": f"Vlera alternative për {conflict.get('field') or 'faktin'}",
+            "description": (
+                "Dosja përmban vlera alternative. Vlera kanonike është zgjedhur "
+                "sipas autoritetit, besueshmërisë dhe konfirmimit ndërmjet burimeve."
+            ),
+            "evidence": {
+                "selected_value": conflict.get("selected_value"),
+                "alternatives": conflict.get("alternatives", [])[:4],
+            },
+        }
+        for conflict in conflicts[:20]
+        if isinstance(conflict, dict)
+    ]
+
+
+def _dossier_integrity_issues(dossier: dict[str, Any]) -> list[dict[str, Any]]:
+    integrity_issues = dossier.get("integrity_issues")
+    if not isinstance(integrity_issues, list):
+        return []
+    return [
+        {
+            "code": issue.get("code") or "DOSSIER-INTEGRITY",
+            "severity": issue.get("severity") or "major",
+            "title": "Mospërputhje në dosjen e konsoliduar",
+            "description": issue.get("description") or "Kërkohet verifikim profesional.",
+            "evidence": dict(issue),
+        }
+        for issue in integrity_issues
+        if isinstance(issue, dict)
+    ]
 
 
 def _fact_consistency_issues(

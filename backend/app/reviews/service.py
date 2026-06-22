@@ -106,6 +106,7 @@ class CurrentFileSnapshot:
     document_type: str | None
     classification_confidence: float | None
     text_content: str | None = None
+    sha256_hash: str | None = None
 
     def as_evidence(self) -> dict[str, Any]:
         return {
@@ -505,6 +506,7 @@ async def _load_current_file_snapshots(
                 document_type=parsed_document.document_type if parsed_document else None,
                 classification_confidence=_safe_float(classification.get("confidence")),
                 text_content=parsed_document.text_content if parsed_document else None,
+                sha256_hash=file_version.sha256_hash,
             )
         )
     return snapshots
@@ -702,6 +704,7 @@ def _current_file_as_dict(current_file: CurrentFileSnapshot) -> dict[str, Any]:
         "parse_status": current_file.parse_status,
         "document_type": current_file.document_type,
         "classification_confidence": current_file.classification_confidence,
+        "sha256_hash": current_file.sha256_hash,
         "text_excerpt": _text_excerpt(current_file.text_content),
     }
 

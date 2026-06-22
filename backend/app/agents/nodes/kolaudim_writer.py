@@ -12,6 +12,23 @@ from app.core.config import settings
 APPROX_CHARS_PER_TOKEN = 3
 BUDGET_METADATA_RESERVED_TOKENS = 250
 
+CORE_WRITER_FACTS = {
+    "object_name",
+    "location",
+    "investor",
+    "owner",
+    "contractor",
+    "supervisor",
+    "designer",
+    "kolaudator",
+    "construction_permit_number",
+    "construction_permit_date",
+    "start_date",
+    "completion_date",
+    "planned_value",
+    "final_value",
+}
+
 DOCUMENT_TYPE_PRIORITY = {
     "construction_permit": 1,
     "development_permit": 1,
@@ -146,14 +163,24 @@ def _build_kolaudim_writer_input(
         "legal_basis": _compact_legal_basis(state),
         "section_blueprint": _section_blueprint(state.get("kolaudim_analysis", {})),
         "instructions": [
-            "Përgatit një Akt-Kolaudimi tekniko-ekonomik të plotë, jo raport auditimi dhe jo checklist.",
-            "Faktet kanonike kanë përparësi ndaj çdo formulimi tjetër në fragmentet e dokumenteve.",
-            "Dokumentet me evidence_role=style_reference përdoren vetëm për strukturë dhe stil, kurrë për fakte.",
-            "Dokumentet me evidence_role=foreign_project_reference i përkasin një objekti tjetër dhe nuk përdoren për asnjë fakt të këtij akti.",
-            "Përshkruaj faktet e provuara nga aktet, procesverbalet dhe dokumentet teknike pa pretenduar inspektim fizik të kryer nga sistemi.",
-            "Mos shfaq emra fushash, kode sistemi, status parse, confidence, workflow, gjetje apo lista dokumentesh që mungojnë.",
-            "Pasiguritë materiale integroji shkurt në konkluzion; mos krijo seksion checklist ose listë të gjatë rezervash.",
-            "Përdor 10 deri në 12 seksionet e blueprint-it, me narrativë të detajuar dhe pa përsëritje.",
+            "Përgatit një Akt-Kolaudimi tekniko-ekonomik të plotë, jo raport "
+            "auditimi dhe jo checklist.",
+            "Faktet kanonike dhe regjistrat e konsoliduar kanë përparësi ndaj "
+            "çdo formulimi tjetër.",
+            "Përdor regjistrat profesionalë për kronologjinë, punimet, materialet, "
+            "provat, kontratat dhe vlerat.",
+            "Dokumentet me evidence_role=style_reference përdoren vetëm për "
+            "strukturë dhe stil, kurrë për fakte.",
+            "Dokumentet me evidence_role=foreign_project_reference i përkasin një "
+            "objekti tjetër dhe nuk përdoren për asnjë fakt të këtij akti.",
+            "Përshkruaj faktet e provuara nga aktet, procesverbalet dhe dokumentet "
+            "teknike pa pretenduar inspektim fizik të kryer nga sistemi.",
+            "Mos shfaq emra fushash, kode sistemi, status parse, confidence, "
+            "workflow, gjetje apo lista dokumentesh që mungojnë.",
+            "Pasiguritë materiale integroji shkurt në konkluzion; mos krijo "
+            "seksion checklist ose listë të gjatë rezervash.",
+            "Përdor 10 deri në 12 seksionet e blueprint-it, me narrativë të "
+            "detajuar dhe pa përsëritje.",
             "Titulli publik duhet të jetë 'AKT-KOLAUDIMI TEKNIKO-EKONOMIK'.",
         ],
     }
@@ -163,16 +190,25 @@ def _build_kolaudim_writer_input(
         - _estimate_tokens(writer_input)
         - BUDGET_METADATA_RESERVED_TOKENS
     )
-    writer_input["document_evidence"] = _document_evidence(
-        state.get("documents", []),
-        available_tokens=max(0, remaining_tokens),
-        document_roles={
-            str(record.get("filename")): str(record.get("role"))
-            for record in raw_dossier.get("document_records", [])
-            if isinstance(record, dict)
-        }
-        if isinstance(raw_dossier, dict)
-        else {},
+    has_persisted_analysis = (
+        isinstance(raw_dossier, dict)
+        and isinstance(raw_dossier.get("summary"), dict)
+        and int(raw_dossier["summary"].get("persisted_analysis_count") or 0) > 0
+    )
+    writer_input["document_evidence"] = (
+        []
+        if has_persisted_analysis
+        else _document_evidence(
+            state.get("documents", []),
+            available_tokens=max(0, remaining_tokens),
+            document_roles={
+                str(record.get("filename")): str(record.get("role"))
+                for record in raw_dossier.get("document_records", [])
+                if isinstance(record, dict)
+            }
+            if isinstance(raw_dossier, dict)
+            else {},
+        )
     )
     return _fit_writer_input_to_budget(
         writer_input,
@@ -221,7 +257,6 @@ def _set_budget_metadata(
         "selected_document_count": len(writer_input["document_evidence"]),
     }
     writer_input["budget"]["estimated_input_tokens"] = _estimate_tokens(writer_input)
-    writer_input["budget"]["estimated_input_tokens"] = _estimate_tokens(writer_input)
 
 
 def _shrink_writer_input(writer_input: dict[str, Any]) -> bool:
@@ -242,6 +277,10 @@ def _shrink_writer_input(writer_input: dict[str, Any]) -> bool:
 
     dossier = writer_input.get("professional_dossier")
     if isinstance(dossier, dict):
+        if _shrink_canonical_facts(dossier):
+            return True
+        if _shrink_dossier_registers(dossier):
+            return True
         if _remove_last_list_item(dossier, "technical_observations", 12):
             return True
         if _remove_last_list_item(dossier, "chronology", 8):
@@ -250,6 +289,59 @@ def _shrink_writer_input(writer_input: dict[str, Any]) -> bool:
             return True
 
     return False
+
+
+def _shrink_canonical_facts(dossier: dict[str, Any]) -> bool:
+    facts = dossier.get("canonical_facts")
+    if not isinstance(facts, dict):
+        return False
+
+    non_core_fields = [field for field in facts if field not in CORE_WRITER_FACTS]
+    if non_core_fields:
+        largest_field = max(non_core_fields, key=lambda field: _estimate_tokens(facts[field]))
+        del facts[largest_field]
+        return True
+
+    for detail_key in ("alternatives", "evidence", "source_documents"):
+        candidates = [
+            fact
+            for fact in facts.values()
+            if isinstance(fact, dict)
+            and isinstance(fact.get(detail_key), list)
+            and fact[detail_key]
+        ]
+        if candidates:
+            largest = max(candidates, key=lambda fact: len(fact[detail_key]))
+            largest[detail_key].pop()
+            return True
+    return False
+
+
+def _shrink_dossier_registers(dossier: dict[str, Any]) -> bool:
+    registers = dossier.get("registers")
+    if not isinstance(registers, dict):
+        return False
+    minimums = {
+        "supporting_evidence": 0,
+        "declarations_and_conclusions": 1,
+        "materials_and_tests": 3,
+        "technical_works": 4,
+        "construction_chronology": 4,
+        "contracts_and_economics": 3,
+        "project_parameters": 3,
+        "permits_property_licenses": 3,
+        "stakeholders": 4,
+    }
+    candidates = [
+        (name, entries)
+        for name, entries in registers.items()
+        if isinstance(entries, list) and len(entries) > minimums.get(name, 3)
+    ]
+    if not candidates:
+        return False
+    _, largest = max(candidates, key=lambda item: len(item[1]))
+    largest.pop()
+    return True
 
 
 def _remove_last_list_item(
@@ -304,6 +396,14 @@ def _compact_professional_dossier(dossier: object) -> dict[str, Any]:
 
     return {
         "canonical_facts": compact_facts,
+        "registers": _compact_registers(dossier.get("registers")),
+        "economic_summary": dict(dossier.get("economic_summary", {}))
+        if isinstance(dossier.get("economic_summary"), dict)
+        else {},
+        "evidence_coverage": _compact_evidence_coverage(
+            dossier.get("evidence_coverage")
+        ),
+        "integrity_issues": _limit_dicts(dossier.get("integrity_issues", []), 10),
         "chronology": _limit_dicts(dossier.get("chronology", []), 40),
         "technical_observations": _limit_dicts(
             dossier.get("technical_observations", []),
@@ -338,6 +438,87 @@ def _compact_professional_dossier(dossier: object) -> dict[str, Any]:
         ),
         "summary": dict(dossier.get("summary", {}))
         if isinstance(dossier.get("summary"), dict)
+        else {},
+    }
+
+
+def _compact_registers(value: object) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}
+    limits = {
+        "stakeholders": 40,
+        "permits_property_licenses": 60,
+        "project_parameters": 80,
+        "construction_chronology": 120,
+        "technical_works": 140,
+        "materials_and_tests": 120,
+        "contracts_and_economics": 80,
+        "declarations_and_conclusions": 60,
+        "supporting_evidence": 40,
+    }
+    compact: dict[str, list[dict[str, Any]]] = {}
+    for register, entries in value.items():
+        if not isinstance(entries, list):
+            continue
+        compact[str(register)] = [
+            _compact_register_entry(entry)
+            for entry in entries[: limits.get(str(register), 40)]
+            if isinstance(entry, dict)
+        ]
+    return compact
+
+
+def _compact_register_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "field_name": entry.get("field_name"),
+        "value": entry.get("value"),
+        "normalized_value": entry.get("normalized_value"),
+        "confidence_level": entry.get("confidence_level"),
+        "source_documents": _string_list(entry.get("source_documents"), limit=6),
+        "sources": [
+            {
+                "source_document": source.get("source_document"),
+                "document_type": source.get("document_type"),
+                "file_version_id": source.get("file_version_id"),
+                "chunk_references": [
+                    {
+                        "chunk_id": reference.get("chunk_id"),
+                        "chunk_index": reference.get("chunk_index"),
+                        "page_start": reference.get("page_start"),
+                        "page_end": reference.get("page_end"),
+                        "coordinates": reference.get("coordinates"),
+                        "excerpt": _truncate(reference.get("excerpt"), 180),
+                    }
+                    for reference in source.get("chunk_references", [])[:2]
+                    if isinstance(reference, dict)
+                ],
+            }
+            for source in entry.get("sources", [])[:3]
+            if isinstance(source, dict)
+        ],
+    }
+
+
+def _compact_evidence_coverage(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    by_register = value.get("by_register")
+    return {
+        "eligible_document_count": value.get("eligible_document_count"),
+        "analyzed_document_count": value.get("analyzed_document_count"),
+        "unanalyzed_document_count": value.get("unanalyzed_document_count"),
+        "analysis_coverage_ratio": value.get("analysis_coverage_ratio"),
+        "by_register": {
+            str(register): {
+                "entry_count": details.get("entry_count"),
+                "source_document_count": details.get("source_document_count"),
+                "source_chunk_count": details.get("source_chunk_count"),
+                "fields": _string_list(details.get("fields"), limit=40),
+            }
+            for register, details in by_register.items()
+            if isinstance(details, dict)
+        }
+        if isinstance(by_register, dict)
         else {},
     }
 

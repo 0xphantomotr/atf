@@ -152,6 +152,17 @@ Canonical values should be selected using generic criteria:
 No project-specific names, values, filenames or expected conclusions may be embedded in
 production logic.
 
+Current progress:
+
+- [x] Build canonical professional registers from persisted, verified claims.
+- [x] Match analyses to immutable current file versions and SHA-256 hashes.
+- [x] Preserve analysis, claim, file-version and chunk provenance in register entries.
+- [x] Rank evidence by authority, extraction confidence and corroboration.
+- [x] Calculate chronology, economic and analysis-coverage integrity results.
+- [x] Exclude style references, foreign-project evidence and unverified excerpts.
+- [x] Feed consolidated registers to section planning and final Akt generation.
+- [x] Fit consolidated writer input dynamically to the selected model budget.
+
 ## 7. Specialist Review Stages
 
 Create structured specialist memoranda before drafting the final Akt:

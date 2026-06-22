@@ -297,12 +297,14 @@ async def analysis_run_payloads(
     for claim in result.scalars():
         claims_by_run[claim.analysis_run_id].append(
             {
+                "claim_id": str(claim.id),
                 "category": claim.category,
                 "field_name": claim.field_name,
                 "original_value": claim.original_value,
                 "normalized_value": claim.normalized_value,
                 "confidence": float(claim.confidence) if claim.confidence is not None else None,
                 "evidence": list(claim.evidence or []),
+                "extraction_method": claim.extraction_method,
             }
         )
 

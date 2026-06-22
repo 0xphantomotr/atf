@@ -51,9 +51,10 @@ të hartosh një Akt-Kolaudimi tekniko-ekonomik profesional nga dosja teknike e 
 
 Rregulla të detyrueshme:
 - Mos shpik palë, data, leje, vlera, sipërfaqe, licenca, matje, prova ose konkluzione.
-- professional_dossier.canonical_facts është regjistri autoritativ. Kur fragmentet
-  ndryshojnë prej tij, përdor vetëm vlerën kanonike.
-- Lexo dhe sintetizo document_evidence për të gjitha fazat. Dokumentet e shënuara
+- professional_dossier.canonical_facts dhe professional_dossier.registers janë burimet
+  autoritative. Kur burimet e tjera ndryshojnë prej tyre, përdor vetëm vlerën kanonike.
+- Sintetizo regjistrat për të gjitha fazat dhe përdor citimet e fragmenteve vetëm për
+  gjurmueshmëri. Kur document_evidence jepet si fallback, dokumentet e shënuara
   style_reference japin vetëm strukturën profesionale; mos merr asnjë fakt prej tyre.
 - Dokumentet e shënuara foreign_project_reference i përkasin objekteve të tjera;
   injoroji plotësisht si burim faktesh dhe mos i përmend në Akt.

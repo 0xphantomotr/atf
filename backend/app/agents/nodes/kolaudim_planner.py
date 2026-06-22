@@ -8,6 +8,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
         "title": "Baza ligjore dhe objekti i kolaudimit",
         "fact_fields": ("object_name", "location"),
         "evidence_sections": ("legal_and_administrative",),
+        "registers": ("permits_property_licenses",),
     },
     {
         "code": "project_identity_and_parties",
@@ -23,6 +24,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
             "kolaudator_license",
         ),
         "evidence_sections": ("parties_and_contracts",),
+        "registers": ("stakeholders",),
     },
     {
         "code": "permits_property_and_approved_design",
@@ -36,6 +38,7 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
             "cadastral_zone",
         ),
         "evidence_sections": ("legal_and_administrative", "design_and_parameters"),
+        "registers": ("permits_property_licenses", "project_parameters"),
     },
     {
         "code": "technical_parameters",
@@ -49,12 +52,14 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
             "floors_below_ground",
         ),
         "evidence_sections": ("design_and_parameters",),
+        "registers": ("project_parameters",),
     },
     {
         "code": "geology_seismicity_and_setting_out",
         "title": "Kushtet gjeologo-inxhinierike, sizmike dhe piketimi",
         "fact_fields": ("soil_bearing_capacity", "seismic_intensity"),
         "evidence_sections": ("design_and_parameters", "execution_and_chronology"),
+        "registers": ("project_parameters", "technical_works"),
     },
     {
         "code": "contracts_values_and_deadlines",
@@ -66,24 +71,28 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
             "completion_date",
         ),
         "evidence_sections": ("parties_and_contracts", "technical_economic"),
+        "registers": ("contracts_and_economics", "stakeholders"),
     },
     {
         "code": "execution_chronology",
         "title": "Ecuria dhe fazat e realizimit të punimeve",
         "fact_fields": ("start_date", "completion_date"),
         "evidence_sections": ("execution_and_chronology",),
+        "registers": ("construction_chronology",),
     },
     {
         "code": "hidden_works_and_structure",
         "title": "Punimet e maskuara dhe elementet konstruktive",
         "fact_fields": (),
         "evidence_sections": ("quality_and_hidden_works", "execution_and_chronology"),
+        "registers": ("technical_works",),
     },
     {
         "code": "materials_tests_and_quality",
         "title": "Materialet, provat dhe kontrolli i cilësisë",
         "fact_fields": (),
         "evidence_sections": ("quality_and_hidden_works",),
+        "registers": ("materials_and_tests",),
     },
     {
         "code": "measurements_and_conformity",
@@ -94,18 +103,24 @@ KOLAUDIM_SECTIONS: tuple[dict[str, Any], ...] = (
             "total_construction_area",
         ),
         "evidence_sections": ("design_and_parameters", "completion_and_conclusion"),
+        "registers": ("project_parameters", "technical_works"),
     },
     {
         "code": "technical_economic_conclusion",
         "title": "Konkluzioni tekniko-ekonomik",
         "fact_fields": ("final_value",),
         "evidence_sections": ("technical_economic", "completion_and_conclusion"),
+        "registers": (
+            "contracts_and_economics",
+            "declarations_and_conclusions",
+        ),
     },
     {
         "code": "copies_and_signatures",
         "title": "Hartimi i aktit dhe nënshkrimet",
         "fact_fields": ("investor", "contractor", "supervisor", "kolaudator"),
         "evidence_sections": (),
+        "registers": ("stakeholders",),
     },
 )
 
@@ -115,13 +130,16 @@ def plan_kolaudim_act(state: AuditGraphState) -> AuditGraphState:
     dossier = state.get("professional_dossier", {})
     canonical_facts = dossier.get("canonical_facts", {}) if isinstance(dossier, dict) else {}
     evidence = dossier.get("evidence_by_section", {}) if isinstance(dossier, dict) else {}
+    registers = dossier.get("registers", {}) if isinstance(dossier, dict) else {}
     if not isinstance(canonical_facts, dict):
         canonical_facts = {}
     if not isinstance(evidence, dict):
         evidence = {}
+    if not isinstance(registers, dict):
+        registers = {}
 
     sections = [
-        _section_plan(section, canonical_facts, evidence)
+        _section_plan(section, canonical_facts, evidence, registers)
         for section in KOLAUDIM_SECTIONS
     ]
     missing_core_fields = (
@@ -151,6 +169,7 @@ def _section_plan(
     section: dict[str, Any],
     canonical_facts: dict[str, Any],
     evidence: dict[str, Any],
+    registers: dict[str, Any],
 ) -> dict[str, Any]:
     available_fields = [
         field for field in section["fact_fields"] if canonical_facts.get(field)
@@ -166,12 +185,18 @@ def _section_plan(
             if isinstance(filename, str)
         }
     )
+    register_entry_counts = {
+        register: len(registers.get(register, []))
+        for register in section.get("registers", ())
+        if isinstance(registers.get(register), list)
+    }
     return {
         "code": section["code"],
         "title": section["title"],
         "available_fact_fields": available_fields,
         "unresolved_fact_fields": missing_fields,
         "source_documents": source_documents,
+        "register_entry_counts": register_entry_counts,
         "writing_instruction": (
             "Shkruaj vetëm nga evidenca e disponueshme; mos përdor gjuhë checklist "
             "dhe mos deklaro kontroll fizik që nuk provohet nga aktet burimore."

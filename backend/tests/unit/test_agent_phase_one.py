@@ -580,6 +580,86 @@ def test_writer_excludes_foreign_and_style_reference_text() -> None:
     assert "example.docx" not in str(writer_input)
 
 
+def test_writer_prefers_consolidated_registers_over_raw_excerpts() -> None:
+    state = {
+        "project": {"name": "Dosja Teknike"},
+        "job": {"job_type": "kolaudim_act", "law_scope": ["VKM_610_2022"]},
+        "documents": [
+            {
+                "original_filename": "leje.pdf",
+                "parse_status": "parsed",
+                "document_type": "construction_permit",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Ky tekst i papërpunuar nuk duhet të dërgohet.",
+            }
+        ],
+        "professional_dossier": {
+            "canonical_facts": {
+                "construction_permit_number": {
+                    "value": "Nr. 42",
+                    "confidence_level": "high",
+                    "source_documents": ["leje.pdf"],
+                    "evidence": [],
+                    "alternatives": [],
+                }
+            },
+            "registers": {
+                "permits_property_licenses": [
+                    {
+                        "field_name": "construction_permit_number",
+                        "value": "Nr. 42",
+                        "confidence_level": "high",
+                        "source_documents": ["leje.pdf"],
+                        "sources": [
+                            {
+                                "source_document": "leje.pdf",
+                                "document_type": "construction_permit",
+                                "chunk_references": [
+                                    {
+                                        "chunk_index": 0,
+                                        "page_start": 1,
+                                        "page_end": 1,
+                                        "excerpt": "Leje ndërtimi nr. 42",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            },
+            "economic_summary": {},
+            "evidence_coverage": {"analysis_coverage_ratio": 1.0},
+            "integrity_issues": [],
+            "document_records": [
+                {"filename": "leje.pdf", "role": "authoritative_evidence"}
+            ],
+            "chronology": [],
+            "technical_observations": [],
+            "conflicts": [],
+            "evidence_by_section": {},
+            "style_references": [],
+            "missing_core_fields": [],
+            "summary": {"persisted_analysis_count": 1},
+        },
+        "kolaudim_analysis": {"sections": []},
+        "rules": [],
+    }
+
+    writer_input = _build_kolaudim_writer_input(
+        state,
+        ai_settings={
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "api_key": "test",
+        },
+    )
+
+    assert writer_input["document_evidence"] == []
+    register = writer_input["professional_dossier"]["registers"]
+    assert register["permits_property_licenses"][0]["value"] == "Nr. 42"
+    assert "Ky tekst i papërpunuar" not in str(writer_input)
+
+
 def test_claim_verifier_accepts_clean_human_style_act() -> None:
     state = {
         "agent_trace": [],
