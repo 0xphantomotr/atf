@@ -30,6 +30,7 @@ from app.reports.schemas import (
     ReportProject,
 )
 from app.reviews.models import GeneratedOutput, ReviewFinding, ReviewJob
+from app.reviews.preflight import estimate_generation_plan
 from app.reviews.schemas import GenerateRequest
 from app.rules.models import Rule
 
@@ -164,8 +165,12 @@ async def create_review_job(
     output_format = _normalize_output_format(payload.output_format)
     project = await _get_project_for_user(session, project_id=project_id, user_id=user_id)
     law_scope = _normalize_law_scope(payload.law_scope)
-    if payload.require_ai_review:
-        await ai_service.require_user_ai_setting(session, user_id=user_id)
+    execution_plan = await estimate_review_job(
+        session,
+        project_id=project.id,
+        user_id=user_id,
+        payload=payload,
+    )
 
     job = ReviewJob(
         project_id=project.id,
@@ -179,6 +184,7 @@ async def create_review_job(
             "codes": list(law_scope),
             "require_ai_review": payload.require_ai_review,
         },
+        execution_plan=execution_plan,
         progress=0,
     )
     session.add(job)
@@ -190,6 +196,40 @@ async def create_review_job(
 
         run_review_job.send(str(job.id))
     return job
+
+
+async def estimate_review_job(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    payload: GenerateRequest,
+) -> dict[str, Any]:
+    project = await _get_project_for_user(
+        session,
+        project_id=project_id,
+        user_id=user_id,
+    )
+    ai_settings: dict[str, Any] | None = None
+    if payload.require_ai_review:
+        await ai_service.require_user_ai_setting(session, user_id=user_id)
+        ai_settings = await ai_service.get_user_ai_credentials(
+            session,
+            user_id=user_id,
+        )
+        if ai_settings is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Konfigurimi AI nuk është i disponueshëm.",
+            )
+
+    return await estimate_generation_plan(
+        session,
+        project_id=project.id,
+        job_type=payload.job_type,
+        require_ai_review=payload.require_ai_review,
+        ai_settings=ai_settings,
+    )
 
 
 async def run_queued_review_job(

@@ -2,6 +2,7 @@ from fastapi import HTTPException
 
 from app.ai.providers import AIProviderError, AI_PROVIDERS, get_provider
 from app.ai.service import _validated_models
+from app.ai.stages import ai_settings_for_stage, normalize_ai_stage, resolved_stage_models
 from app.core.security import decrypt_secret, encrypt_secret, secret_hint
 
 
@@ -46,3 +47,32 @@ def test_model_validation_rejects_auth_errors(monkeypatch) -> None:
         assert exc.detail == "unauthorized"
     else:
         raise AssertionError("Expected HTTPException")
+
+
+def test_stage_models_fall_back_to_default_and_apply_overrides() -> None:
+    ai_settings = {
+        "provider": "gemini",
+        "model": "gemini-2.5-flash",
+        "stage_models": {
+            "extraction": "gemini-2.5-flash-lite",
+            "drafting": "gemini-3.1-flash-lite",
+            "unknown": "ignored",
+        },
+    }
+
+    assert resolved_stage_models(ai_settings) == {
+        "extraction": "gemini-2.5-flash-lite",
+        "synthesis": "gemini-2.5-flash",
+        "drafting": "gemini-3.1-flash-lite",
+        "correction": "gemini-2.5-flash",
+    }
+    assert ai_settings_for_stage(ai_settings, "drafting")["stage"] == "drafting"
+
+
+def test_invalid_ai_stage_is_rejected() -> None:
+    try:
+        normalize_ai_stage("reporting")
+    except ValueError as exc:
+        assert "extraction" in str(exc)
+    else:
+        raise AssertionError("Expected invalid stage to be rejected")

@@ -14,6 +14,7 @@ from app.ai.providers import (
     list_provider_models,
 )
 from app.ai.schemas import AIProviderRead, AISettingUpsert
+from app.ai.stages import normalize_ai_stage, normalize_stage_models
 from app.core.security import decrypt_secret, encrypt_secret, secret_hint
 
 
@@ -76,6 +77,7 @@ async def upsert_user_ai_setting(
             user_id=user_id,
             provider=provider.id,
             selected_model=selected_model,
+            stage_models={},
             encrypted_api_key=encrypt_secret(payload.api_key),
             api_key_hint=secret_hint(payload.api_key),
             is_enabled=True,
@@ -84,6 +86,7 @@ async def upsert_user_ai_setting(
     else:
         setting.provider = provider.id
         setting.selected_model = selected_model
+        setting.stage_models = {}
         setting.encrypted_api_key = encrypt_secret(payload.api_key)
         setting.api_key_hint = secret_hint(payload.api_key)
         setting.is_enabled = True
@@ -127,6 +130,46 @@ async def update_user_ai_model(
     return setting
 
 
+async def update_user_ai_stage_model(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    stage: str,
+    model: str,
+) -> UserAISetting:
+    setting = await require_user_ai_setting(session, user_id=user_id)
+    normalized_stage = _validated_stage(stage)
+    provider_id, models, _ = await list_user_available_models(session, user_id=user_id)
+    if model not in models:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Modeli nuk u gjet te {provider_id}. Përdorni /ai_models për listën.",
+        )
+
+    stage_models = normalize_stage_models(setting.stage_models)
+    stage_models[normalized_stage] = model
+    setting.stage_models = stage_models
+    await session.commit()
+    await session.refresh(setting)
+    return setting
+
+
+async def clear_user_ai_stage_model(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    stage: str,
+) -> UserAISetting:
+    setting = await require_user_ai_setting(session, user_id=user_id)
+    normalized_stage = _validated_stage(stage)
+    stage_models = normalize_stage_models(setting.stage_models)
+    stage_models.pop(normalized_stage, None)
+    setting.stage_models = stage_models
+    await session.commit()
+    await session.refresh(setting)
+    return setting
+
+
 async def delete_user_ai_setting(
     session: AsyncSession,
     *,
@@ -151,6 +194,7 @@ async def get_user_ai_credentials(
         "provider_label": provider.label,
         "base_url": provider.base_url,
         "model": setting.selected_model,
+        "stage_models": normalize_stage_models(setting.stage_models),
         "api_key": decrypt_secret(setting.encrypted_api_key),
         "api_key_hint": setting.api_key_hint,
     }
@@ -177,3 +221,13 @@ def _default_model_for_provider(provider_id: str, models: list[str]) -> str:
         if curated_model in models:
             return curated_model
     return models[0] if models else provider.default_model
+
+
+def _validated_stage(stage: str) -> str:
+    try:
+        return normalize_ai_stage(stage)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc

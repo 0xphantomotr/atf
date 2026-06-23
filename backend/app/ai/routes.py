@@ -70,6 +70,36 @@ async def update_ai_model(
     return AISettingRead.model_validate(setting)
 
 
+@router.patch("/model/{stage}", response_model=AISettingRead)
+async def update_ai_stage_model(
+    stage: str,
+    payload: AIModelUpdate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AISettingRead:
+    setting = await service.update_user_ai_stage_model(
+        session,
+        user_id=current_user.id,
+        stage=stage,
+        model=payload.model,
+    )
+    return AISettingRead.model_validate(setting)
+
+
+@router.delete("/model/{stage}", response_model=AISettingRead)
+async def clear_ai_stage_model(
+    stage: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AISettingRead:
+    setting = await service.clear_user_ai_stage_model(
+        session,
+        user_id=current_user.id,
+        stage=stage,
+    )
+    return AISettingRead.model_validate(setting)
+
+
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_ai_setting(
     current_user: User = Depends(get_current_user),

@@ -8,6 +8,7 @@ from app.db.session import get_session
 from app.reviews import service
 from app.reviews.schemas import (
     GenerateRequest,
+    GenerationPreflightRead,
     GeneratedOutputRead,
     JobOutputRead,
     ReviewFindingRead,
@@ -17,6 +18,25 @@ from app.users.dependencies import get_current_user
 from app.users.models import User
 
 router = APIRouter(tags=["reviews"])
+
+
+@router.post(
+    "/projects/{project_id}/generate/preflight",
+    response_model=GenerationPreflightRead,
+)
+async def generation_preflight(
+    project_id: UUID,
+    payload: GenerateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> GenerationPreflightRead:
+    plan = await service.estimate_review_job(
+        session,
+        project_id=project_id,
+        user_id=current_user.id,
+        payload=payload,
+    )
+    return GenerationPreflightRead.model_validate(plan)
 
 
 @router.post(

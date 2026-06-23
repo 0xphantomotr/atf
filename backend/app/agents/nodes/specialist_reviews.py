@@ -8,6 +8,7 @@ from app.agents.llm import (
     specialist_review_input_token_budget,
 )
 from app.agents.state import AuditGraphState
+from app.ai.stages import ai_settings_for_stage
 from app.core.config import settings
 
 APPROX_CHARS_PER_TOKEN = 3
@@ -96,6 +97,7 @@ def review_specialist_domains(state: AuditGraphState) -> AuditGraphState:
             reason="missing_user_ai_settings",
         )
         return state
+    ai_settings = ai_settings_for_stage(ai_settings, "synthesis")
 
     review_input = _build_specialist_review_input(state, ai_settings=ai_settings)
     evidence_count = len(review_input["evidence_catalog"])

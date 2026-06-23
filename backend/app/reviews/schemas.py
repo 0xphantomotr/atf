@@ -23,6 +23,17 @@ class ReviewJobRead(BaseModel):
     language: str
     output_format: str
     progress: int
+    execution_plan: dict
+
+
+class GenerationPreflightRead(BaseModel):
+    version: int
+    generated_at: datetime
+    project_id: UUID
+    source: dict
+    stages: list[dict]
+    totals: dict
+    assumptions: list[str]
 
 
 class GeneratedOutputRead(BaseModel):

@@ -55,3 +55,32 @@ Queue the same immutable version for parsing/OCR again:
 ```text
 POST /projects/{project_id}/files/{file_id}/versions/{version_id}/reprocess
 ```
+
+## AI Stage Models And Preflight
+
+Each user keeps one default provider/model and may optionally override the model used for
+document extraction, specialist synthesis, Akt drafting, or the bounded correction pass.
+All stage models use the same encrypted user API key and must belong to that provider.
+
+Telegram commands:
+
+```text
+/ai
+/ai_models
+/ai_model default-model-name
+/ai_stage extraction economical-model-name
+/ai_stage drafting stronger-model-name
+/ai_stage extraction default
+/vlereso
+/gjenero
+```
+
+The `default` value removes a stage override. `/vlereso` inspects the active project's
+current files and cache, then reports a conservative maximum call/token estimate without
+starting a job.
+
+The same preflight is available through the API:
+
+```text
+POST /projects/{project_id}/generate/preflight
+```

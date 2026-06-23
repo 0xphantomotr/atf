@@ -54,7 +54,7 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
 
 - [x] Unit coverage for parsing, document analysis, dossier consolidation, specialist
   review, model budgeting and Akt generation.
-- [x] Latest complete test run: 91 passed, 1 skipped.
+- [x] Latest complete test run: 95 passed, 1 skipped.
 - [x] `.env`, API keys and local human reference documents excluded from commits.
 
 ## Completed Milestone: Claim-Grounded Finalization
@@ -110,10 +110,10 @@ an unsupported conclusion more convincingly.
 
 ### Model routing and quota efficiency
 
-- [ ] Support model selection by stage instead of one model for the entire workflow.
-- [ ] Use a cost-efficient model for document extraction and a stronger reasoning model
+- [x] Support model selection by stage instead of one model for the entire workflow.
+- [x] Use a cost-efficient model for document extraction and a stronger reasoning model
   for specialist synthesis, final drafting and correction.
-- [ ] Estimate calls and token volume before starting a full-folder analysis.
+- [x] Estimate calls and token volume before starting a full-folder analysis.
 - [ ] Enforce provider-specific RPM, TPM and daily-request limits.
 - [ ] Respect provider `Retry-After` values and pause jobs instead of exhausting retries.
 - [ ] Resume quota-limited jobs without repeating completed files or batches.

@@ -19,6 +19,7 @@ class ReviewJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     output_format: Mapped[str] = mapped_column(String(32), nullable=False)
     user_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     law_scope: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    execution_plan: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -52,4 +53,3 @@ class GeneratedOutput(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     text_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_metadata: Mapped[dict] = mapped_column("metadata", JSONB, default=dict, nullable=False)
-

@@ -15,6 +15,7 @@ from app.agents.llm import (
     model_request_token_limit,
     request_document_analysis,
 )
+from app.ai.stages import ai_settings_for_stage
 from app.document_analysis.models import (
     DocumentAnalysisBatch,
     DocumentAnalysisClaim,
@@ -68,6 +69,7 @@ async def analyze_file_version(
     ai_settings: dict[str, Any],
     request_pacer: ProviderRequestPacer | None = None,
 ) -> DocumentAnalysisRun:
+    ai_settings = ai_settings_for_stage(ai_settings, "extraction")
     file_version, project_file, parsed_document = await _load_analysis_source(
         session,
         file_version_id=file_version_id,
@@ -246,6 +248,7 @@ async def ensure_project_document_analyses(
     requested_by: uuid.UUID,
     ai_settings: dict[str, Any],
 ) -> list[DocumentAnalysisRun]:
+    ai_settings = ai_settings_for_stage(ai_settings, "extraction")
     result = await session.execute(
         select(FileVersion)
         .join(ProjectFile, ProjectFile.id == FileVersion.file_id)

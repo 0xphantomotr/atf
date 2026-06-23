@@ -1,5 +1,6 @@
 from app.agents.llm import LLMReviewError, request_senior_review
 from app.agents.state import AuditGraphState
+from app.ai.stages import ai_settings_for_stage
 from app.core.config import settings
 from app.files.status import is_parsed_status
 
@@ -44,6 +45,7 @@ def senior_review(state: AuditGraphState) -> AuditGraphState:
         if state.get("require_ai_review"):
             state["needs_human_review"] = True
         return state
+    ai_settings = ai_settings_for_stage(ai_settings, "synthesis")
 
     try:
         review = request_senior_review(_build_review_input(state), ai_settings=ai_settings)

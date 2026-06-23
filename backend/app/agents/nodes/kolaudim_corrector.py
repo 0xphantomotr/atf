@@ -5,6 +5,7 @@ from app.agents.claim_grounding import build_claim_evidence_catalog
 from app.agents.llm import LLMReviewError, request_kolaudim_correction
 from app.agents.nodes.kolaudim_writer import _normalize_kolaudim_draft
 from app.agents.state import AuditGraphState
+from app.ai.stages import ai_settings_for_stage
 
 
 class ClaimVerificationError(RuntimeError):
@@ -52,6 +53,7 @@ def correct_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
             "reason": "correction_not_available",
         }
         return state
+    ai_settings = ai_settings_for_stage(ai_settings, "correction")
 
     catalog = build_claim_evidence_catalog(state)
     correction_input = _build_correction_input(

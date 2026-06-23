@@ -17,6 +17,7 @@ class AISettingRead(BaseModel):
     id: UUID
     provider: str
     selected_model: str
+    stage_models: dict[str, str]
     api_key_hint: str
     is_enabled: bool
     created_at: datetime

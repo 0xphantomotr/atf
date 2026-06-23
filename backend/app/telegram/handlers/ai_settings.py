@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from app.ai import service as ai_service
 from app.ai.schemas import AISettingUpsert
+from app.ai.stages import AI_STAGE_LABELS, AI_STAGES, normalize_stage_models
 from app.db.session import AsyncSessionLocal
 from app.telegram.service import get_or_create_message_user
 
@@ -24,9 +25,12 @@ async def ai_status(message: Message) -> None:
     await message.answer(
         "AI është konfiguruar.\n\n"
         f"Provider: {setting.provider}\n"
-        f"Modeli: {setting.selected_model}\n"
+        f"Modeli bazë: {setting.selected_model}\n"
         f"API key: {setting.api_key_hint}\n\n"
-        "Ndryshoni modelin me /ai_models dhe /ai_model.\n"
+        "Modelet sipas fazës:\n"
+        + _stage_models_text(setting.selected_model, setting.stage_models)
+        + "\n\nNdryshoni modelin bazë me /ai_model.\n"
+        "Vendosni model faze me /ai_stage.\n"
         "Zëvendësoni key me /ai_key.\n"
         "Fshijeni me /ai_delete."
     )
@@ -119,6 +123,47 @@ async def update_ai_model(message: Message, command: CommandObject) -> None:
     )
 
 
+@router.message(Command("ai_stage"))
+async def update_ai_stage_model(message: Message, command: CommandObject) -> None:
+    args = (command.args or "").strip().split(maxsplit=1)
+    if len(args) != 2:
+        await message.answer(
+            "Formati:\n\n"
+            "/ai_stage faza modeli\n\n"
+            "Fazat: extraction, synthesis, drafting, correction\n"
+            "Përdorni 'default' si model për të hequr override-in."
+        )
+        return
+
+    stage, model = args
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_message_user(session, message)
+        try:
+            if model.lower() == "default":
+                setting = await ai_service.clear_user_ai_stage_model(
+                    session,
+                    user_id=user.id,
+                    stage=stage,
+                )
+                action = "Override-i u hoq"
+            else:
+                setting = await ai_service.update_user_ai_stage_model(
+                    session,
+                    user_id=user.id,
+                    stage=stage,
+                    model=model,
+                )
+                action = "Modeli i fazës u përditësua"
+        except HTTPException as exc:
+            await message.answer(f"Nuk u ndryshua modeli i fazës.\n\n{exc.detail}")
+            return
+
+    await message.answer(
+        f"{action}.\n\n"
+        + _stage_models_text(setting.selected_model, setting.stage_models)
+    )
+
+
 @router.message(Command("ai_delete"))
 async def delete_ai_key(message: Message) -> None:
     async with AsyncSessionLocal() as session:
@@ -146,6 +191,8 @@ def _ai_help_text() -> str:
         "/ai_models\n\n"
         "3. Zgjidhni model:\n"
         "/ai_model emri_i_modelit\n\n"
+        "4. Opsionale, model sipas fazës:\n"
+        "/ai_stage extraction emri_i_modelit\n\n"
         "Statusi: /ai\n"
         "Fshirja: /ai_delete"
     )
@@ -159,4 +206,14 @@ def _models_preview(models: list[str]) -> str:
         lines.append(f"- {model}")
     if len(models) > 15:
         lines.append(f"... edhe {len(models) - 15} modele të tjera.")
+    return "\n".join(lines)
+
+
+def _stage_models_text(default_model: str, value: object) -> str:
+    overrides = normalize_stage_models(value)
+    lines = []
+    for stage in AI_STAGES:
+        model = overrides.get(stage, default_model)
+        suffix = "" if stage in overrides else " (bazë)"
+        lines.append(f"- {AI_STAGE_LABELS[stage]} [{stage}]: {model}{suffix}")
     return "\n".join(lines)
