@@ -4,9 +4,11 @@ from typing import Any
 
 from app.agents.claim_grounding import (
     build_claim_evidence_catalog,
+    canonical_evidence_id,
     current_file_version_ids,
     evidence_is_current,
 )
+from app.agents.public_details import select_required_public_details
 from app.agents.state import AuditGraphState
 
 PLACEHOLDER_PATTERN = re.compile(r"(?:\?{2,}|_{3,}|\.{5,}|\bxxx\b|\btodo\b)", re.I)
@@ -30,7 +32,10 @@ UNSIGNED_AUTHORIZATION_PATTERN = re.compile(
 )
 LIMITING_STATEMENT_PATTERN = re.compile(
     r"\b(?:nuk\s+(?:rezulton|provohet|vertetohet|konfirmohet)|"
-    r"pa\s+u\s+verifikuar|kerkon\s+verifikim|duhet\s+verifikuar|"
+    r"(?:nga|sipas|referuar)\s+dokumentacionit|"
+    r"bazuar\s+ne\s+dokumentacion|ne\s+baze\s+te\s+dokumentacionit|"
+    r"pa\s+u\s+verifikuar|mbetet\s+per\s+t\s+u\s+verifikuar|"
+    r"per\s+t\s+u\s+verifikuar|kerkon\s+verifikim|duhet\s+verifikuar|"
     r"me\s+rezerv[eë]|e\s+kufizuar|projekt-akt)\b",
     re.I,
 )
@@ -64,6 +69,7 @@ PUBLIC_BLOCKING_CONFLICT_FIELDS = {
     "cadastral_zone",
 }
 CLAIM_TYPES = {"documented_fact", "professional_inference", "qualification"}
+CONCLUSION_LEVELS = {"proven", "qualified", "not_proven"}
 DIRECT_EVIDENCE_KINDS = {
     "register_entry",
     "canonical_fact",
@@ -186,6 +192,7 @@ def verify_kolaudim_claims(state: AuditGraphState) -> AuditGraphState:
     )
     facts_present = _verify_canonical_facts(canonical, public_text, issues)
     _verify_conflicting_alternatives(dossier, public_text, issues)
+    _verify_required_public_details(dossier, public_text, issues)
 
     major_issues = [issue for issue in issues if issue["severity"] == "major"]
     major_count = len(major_issues)
@@ -379,6 +386,7 @@ def _verify_claim(
     claim_id = str(claim.get("claim_id") or "").strip() or None
     statement = str(claim.get("statement") or "").strip()
     claim_type = str(claim.get("claim_type") or "").strip()
+    conclusion_level = str(claim.get("conclusion_level") or "").strip()
     confidence = claim.get("confidence")
     raw_ids = claim.get("evidence_ids")
     evidence_ids = (
@@ -394,6 +402,33 @@ def _verify_claim(
                 "CLAIM-TYPE-INVALID",
                 "major",
                 "Pretendimi nuk është klasifikuar si fakt, inferencë ose kualifikim.",
+                claim_id,
+            )
+        )
+    if conclusion_level not in CONCLUSION_LEVELS:
+        issues.append(
+            _issue(
+                "CLAIM-CONCLUSION-LEVEL-INVALID",
+                "major",
+                "Pretendimi nuk ka conclusion_level të vlefshëm: proven, qualified ose not_proven.",
+                claim_id,
+            )
+        )
+    if claim_type == "qualification" and conclusion_level == "proven":
+        issues.append(
+            _issue(
+                "CLAIM-CONCLUSION-LEVEL-MISMATCH",
+                "major",
+                "Kualifikimi nuk mund të shënohet si konkluzion proven.",
+                claim_id,
+            )
+        )
+    if conclusion_level == "not_proven" and claim_type != "qualification":
+        issues.append(
+            _issue(
+                "CLAIM-CONCLUSION-LEVEL-MISMATCH",
+                "major",
+                "not_proven duhet të formulohet si qualification, jo si fakt pozitiv.",
                 claim_id,
             )
         )
@@ -468,6 +503,19 @@ def _verify_claim(
             )
         )
 
+    if conclusion_level in {"qualified", "not_proven"} and not _is_limiting_statement(
+        normalized_statement,
+        claim_type,
+    ):
+        issues.append(
+            _issue(
+                "CLAIM-CONCLUSION-LEVEL-LANGUAGE",
+                "major",
+                "qualified/not_proven kërkon formulim kufizues të qartë në tekst.",
+                claim_id,
+            )
+        )
+
     if UNSIGNED_AUTHORIZATION_PATTERN.search(normalized_statement):
         issues.append(
             _issue(
@@ -488,6 +536,18 @@ def _verify_claim(
             continue
         if _is_limiting_statement(normalized_statement, claim_type):
             continue
+        if conclusion_level != "proven":
+            issues.append(
+                _issue(
+                    "CLAIM-CONCLUSION-LEVEL-MISMATCH",
+                    "major",
+                    (
+                        "Pretendimi pozitiv për përfundim, përputhshmëri, matje, "
+                        "prova ose shfrytëzim duhet të jetë proven ose të kualifikohet qartë."
+                    ),
+                    claim_id,
+                )
+            )
         if all(evidence_registers.isdisjoint(group) for group in required_groups):
             issues.append(_issue(code, "major", message, claim_id))
             continue
@@ -555,6 +615,34 @@ def _verify_canonical_facts(
     return facts_present
 
 
+def _verify_required_public_details(
+    dossier: dict[str, Any],
+    public_text: str,
+    issues: list[dict[str, Any]],
+) -> None:
+    for detail in select_required_public_details(dossier, max_items=18):
+        if not detail.get("must_include"):
+            continue
+        value = str(detail.get("value") or "")
+        if not value or _material_value_present(value, public_text):
+            continue
+        issues.append(
+            {
+                "code": "PUBLIC-DETAIL-MISSING",
+                "severity": "major",
+                "message": (
+                    "Drafti nuk ruan një detaj teknik-ekonomik të provuar që duhet "
+                    "të shfaqet në Akt."
+                ),
+                "field": detail.get("field_name"),
+                "register": detail.get("register"),
+                "required_value": value,
+                "source_documents": detail.get("source_documents", []),
+                "evidence_ids": [detail["evidence_id"]],
+            }
+        )
+
+
 def _verify_conflicting_alternatives(
     dossier: object,
     public_text: str,
@@ -582,6 +670,7 @@ def _verify_conflicting_alternatives(
             alternative_value = str(alternative.get("value") or "")
             if (
                 alternative_value
+                and not _material_values_equivalent(selected, alternative_value)
                 and _material_value_present(alternative_value, public_text)
                 and not _material_value_present(selected, public_text)
             ):
@@ -599,6 +688,9 @@ def _verify_conflicting_alternatives(
                         "alternative_score": alternative.get("score"),
                         "selected_source_documents": selected_sources,
                         "alternative_source_documents": _source_documents(alternative),
+                        "evidence_ids": [canonical_evidence_id(field)]
+                        if isinstance(selected_fact, dict)
+                        else [],
                         "message": (
                             "Drafti përdor alternativën dhe jo faktin kanonik "
                             f"për fushën '{field}'."
@@ -612,7 +704,7 @@ def _correction_instruction(issue: dict[str, Any]) -> dict[str, Any]:
     instruction = {
         "code": issue["code"],
         "claim_id": issue.get("claim_id"),
-        "instruction": issue["message"],
+        "instruction": _correction_message(issue),
     }
     for key in (
         "field",
@@ -620,10 +712,48 @@ def _correction_instruction(issue: dict[str, Any]) -> dict[str, Any]:
         "alternative_value",
         "selected_source_documents",
         "alternative_source_documents",
+        "required_value",
+        "source_documents",
+        "register",
+        "evidence_ids",
     ):
         if key in issue:
             instruction[key] = issue[key]
     return instruction
+
+
+def _correction_message(issue: dict[str, Any]) -> str:
+    code = str(issue.get("code") or "")
+    if code == "CLAIM-CONCLUSION-LEVEL-LANGUAGE":
+        return (
+            "Rishkruaje pretendimin me gjuhë kufizuese të qartë, p.sh. "
+            "'nga dokumentacioni rezulton...', 'sipas dokumentacionit...' ose "
+            "'mbetet për t'u verifikuar...', dhe mos e paraqit si konkluzion pozitiv."
+        )
+    if code == "CLAIM-CONCLUSION-LEVEL-MISMATCH":
+        return (
+            "Përputh claim_type, conclusion_level dhe tekstin publik: përdor proven "
+            "vetëm kur evidenca e provon drejtpërdrejt; ndryshe vendos qualification/"
+            "qualified dhe shto kufizim të qartë në tekst."
+        )
+    if code == "CLAIM-CONFORMITY-EVIDENCE":
+        return (
+            "Nëse mungon njëkohësisht evidenca deklarative dhe teknike/projektuese, "
+            "mos deklaro përputhshmëri pozitive; formuloje si kualifikim sipas "
+            "dokumentacionit dhe me verifikim profesional."
+        )
+    if code == "PUBLIC-DETAIL-MISSING":
+        return (
+            "Përfshi vlerën e provuar required_value në seksionin përkatës të Aktit "
+            "duke përdorur vetëm evidence_ids e dhëna."
+        )
+    if code == "PUBLIC-CONFLICT-ALTERNATIVE-USED":
+        return (
+            "Zëvendëso alternative_value me selected_value në tekstin publik dhe "
+            "në claim_ledger për fushën përkatëse. Mos e përdor alternative_value "
+            "si fakt publik; përdor evidence_ids e dhëna për vlerën kanonike."
+        )
+    return str(issue.get("message") or "Korrigjo çështjen e verifikimit.")
 
 
 def _source_documents(item: dict[str, Any]) -> list[str]:
@@ -669,15 +799,65 @@ def _material_value_present(value: str, public_text: str) -> bool:
     normalized_text = _normalize(public_text)
     if normalized_value and normalized_value in normalized_text:
         return True
+    numbers = _number_tokens(normalized_value)
+    if len(set(numbers)) >= 2 and all(
+        number in _number_tokens(normalized_text) for number in numbers
+    ):
+        return True
     tokens = [
         token
         for token in normalized_value.split()
-        if len(token) >= 3 and token not in {"shpk", "bashkia", "fshati"}
+        if len(token) >= 3 and token not in _LOW_SIGNAL_VALUE_TOKENS
     ]
     if not tokens:
         return False
     required = min(len(tokens), 3)
     return sum(1 for token in tokens if token in normalized_text) >= required
+
+
+_LOW_SIGNAL_VALUE_TOKENS = {
+    "bashkia",
+    "date",
+    "dat",
+    "fshati",
+    "kol",
+    "leje",
+    "ndertimi",
+    "nr",
+    "prot",
+    "rep",
+    "shpk",
+}
+
+
+def _material_values_equivalent(left: str, right: str) -> bool:
+    left_normalized = _normalize(left)
+    right_normalized = _normalize(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
+        return True
+    left_numbers = set(_number_tokens(left_normalized))
+    right_numbers = set(_number_tokens(right_normalized))
+    if len(left_numbers) >= 2 and left_numbers == right_numbers:
+        return True
+    left_tokens = _significant_value_tokens(left_normalized)
+    right_tokens = _significant_value_tokens(right_normalized)
+    if not left_tokens or not right_tokens:
+        return False
+    return left_tokens.issubset(right_tokens) or right_tokens.issubset(left_tokens)
+
+
+def _significant_value_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in value.split()
+        if len(token) >= 3 and token not in _LOW_SIGNAL_VALUE_TOKENS
+    }
+
+
+def _number_tokens(value: str) -> list[str]:
+    return re.findall(r"\d+", value)
 
 
 def _normalize(value: object) -> str:

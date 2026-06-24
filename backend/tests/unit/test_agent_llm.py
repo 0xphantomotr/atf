@@ -358,6 +358,7 @@ def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None
                                 "executive_summary": {
                                     "text": "Draft.",
                                     "claim_type": "qualification",
+                                    "conclusion_level": "qualified",
                                     "evidence_ids": ["integrity:0"],
                                     "confidence": 0.6,
                                 },
@@ -393,6 +394,12 @@ def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None
     assert captured["post_kwargs"]["timeout_seconds"] >= 90
     assert "required_output_shape" in user_payload
     assert "paragraphs" in user_payload["required_output_shape"]["sections"][0]
+    assert (
+        user_payload["required_output_shape"]["executive_summary"][
+            "conclusion_level"
+        ]
+        == "proven | qualified | not_proven"
+    )
     assert user_payload["draft_input"]["project"]["name"] == "Test"
     assert draft["status"] == "drafted"
 
@@ -414,6 +421,7 @@ def test_request_kolaudim_correction_uses_grounded_schema(monkeypatch) -> None:
                                 "executive_summary": {
                                     "text": "Përmbledhje e korrigjuar.",
                                     "claim_type": "qualification",
+                                    "conclusion_level": "qualified",
                                     "evidence_ids": ["integrity:0"],
                                     "confidence": 0.6,
                                 },
@@ -449,6 +457,10 @@ def test_request_kolaudim_correction_uses_grounded_schema(monkeypatch) -> None:
     payload = json.loads(captured["body"]["messages"][1]["content"])
     assert captured["path"] == "/chat/completions"
     assert "paragraphs" in payload["required_output_shape"]["sections"][0]
+    assert (
+        payload["required_output_shape"]["executive_summary"]["conclusion_level"]
+        == "proven | qualified | not_proven"
+    )
     assert payload["correction_input"]["correction_issues"][0]["code"] == (
         "CLAIM-EVIDENCE-MISSING"
     )

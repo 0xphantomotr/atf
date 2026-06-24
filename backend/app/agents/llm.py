@@ -248,7 +248,13 @@ SPECIALIST_REVIEW_SCHEMA: dict[str, Any] = {
 GROUNDED_PARAGRAPH_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["text", "claim_type", "evidence_ids", "confidence"],
+    "required": [
+        "text",
+        "claim_type",
+        "conclusion_level",
+        "evidence_ids",
+        "confidence",
+    ],
     "properties": {
         "text": {"type": "string"},
         "claim_type": {
@@ -258,6 +264,10 @@ GROUNDED_PARAGRAPH_SCHEMA: dict[str, Any] = {
                 "professional_inference",
                 "qualification",
             ],
+        },
+        "conclusion_level": {
+            "type": "string",
+            "enum": ["proven", "qualified", "not_proven"],
         },
         "evidence_ids": {
             "type": "array",
@@ -687,6 +697,7 @@ def _kolaudim_user_content(draft_input: dict[str, Any]) -> str:
     paragraph_shape = {
         "text": "professional Albanian paragraph",
         "claim_type": "documented_fact | professional_inference | qualification",
+        "conclusion_level": "proven | qualified | not_proven",
         "evidence_ids": ["only IDs present in draft_input.allowed_evidence_ids"],
         "confidence": "number between 0 and 1",
     }
@@ -716,6 +727,7 @@ def _kolaudim_correction_user_content(correction_input: dict[str, Any]) -> str:
     paragraph_shape = {
         "text": "revised professional Albanian paragraph",
         "claim_type": "documented_fact | professional_inference | qualification",
+        "conclusion_level": "proven | qualified | not_proven",
         "evidence_ids": ["only IDs present in correction_input.allowed_evidence_ids"],
         "confidence": "number between 0 and 1",
     }

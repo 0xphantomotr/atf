@@ -64,13 +64,17 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
   and requires both declaration-level and technical/project evidence for conformity.
 - [x] Professional conclusion guard also rejects generated final-acceptance wording such
   as `punimet janë pranuar` and `struktura është funksionale`.
+- [x] Professional conclusion levels are enforced for every material paragraph:
+  `proven`, `qualified` or `not_proven`.
+- [x] Required public technical-economic details are selected from the dossier and
+  verified before publication.
 - [x] Failed specialist calls preserve deterministic evidence packets.
 
 ### Verification baseline
 
 - [x] Unit coverage for parsing, document analysis, dossier consolidation, specialist
   review, model budgeting and Akt generation.
-- [x] Latest complete test run: 104 passed, 1 skipped.
+- [x] Latest complete test run: 110 passed, 1 skipped.
 - [x] `.env`, API keys and local human reference documents excluded from commits.
 
 ## Completed Milestone: Claim-Grounded Finalization

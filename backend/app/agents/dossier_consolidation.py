@@ -26,6 +26,37 @@ REGISTER_ORDER = (
     REGISTER_OTHER,
 )
 
+CONTRACT_DOCUMENT_TYPES = frozenset(
+    {
+        "contract_and_related_acts",
+        "supervisor_contract",
+        "contractor_contract",
+        "kolaudator_contract",
+    }
+)
+PERMIT_FIELDS = frozenset(
+    {
+        "construction_permit_number",
+        "construction_permit_protocol",
+        "construction_permit_date",
+        "development_permit_number",
+        "development_permit_protocol",
+        "development_permit_date",
+    }
+)
+PERMIT_DOCUMENT_TYPES = frozenset({"construction_permit", "development_permit"})
+PERMIT_CONTEXT_TERMS = (
+    "leje ndertimi",
+    "leja e ndertimit",
+    "lejes se ndertimit",
+    "leje zhvillimi",
+    "leja e zhvillimit",
+    "lejes se zhvillimit",
+    "building permit",
+    "construction permit",
+    "development permit",
+)
+
 FIELD_ALIASES = {
     "project_name": "object_name",
     "project_title": "object_name",
@@ -62,11 +93,28 @@ FIELD_ALIASES = {
     "auditor": "kolaudator",
     "technical_auditor": "kolaudator",
     "kolaudatori": "kolaudator",
+    "investor_name": "investor",
+    "emri_investitorit": "investor",
+    "contractor_name": "contractor",
+    "emri_sipermarresit": "contractor",
+    "supervisor_name": "supervisor",
+    "emri_mbikqyresit": "supervisor",
+    "emri_mbikeqyresit": "supervisor",
+    "kolaudator_name": "kolaudator",
+    "emri_kolaudatorit": "kolaudator",
+    "designer_name": "designer",
+    "emri_projektuesit": "designer",
+    "construction_permit": "construction_permit_number",
     "permit_number": "construction_permit_number",
     "permit_protocol": "construction_permit_protocol",
     "permit_date": "construction_permit_date",
+    "building_permit": "construction_permit_number",
     "building_permit_number": "construction_permit_number",
+    "building_permit_protocol": "construction_permit_protocol",
     "building_permit_date": "construction_permit_date",
+    "leje_ndertimi": "construction_permit_number",
+    "leja_ndertimit": "construction_permit_number",
+    "leje_ndertimit": "construction_permit_number",
     "construction_start_date": "start_date",
     "works_start_date": "start_date",
     "construction_completion_date": "completion_date",
@@ -298,6 +346,16 @@ def _merge_claim_into_registers(
     normalized_value = _clean_value(claim.get("normalized_value"))
     if not field or not value:
         return
+    if not _claim_allowed_for_document(
+        field,
+        category=category,
+        document_type=str(document.get("document_type") or ""),
+        value=value,
+        evidence_text=" ".join(
+            _clean_value(item.get("supporting_excerpt")) for item in evidence[:6]
+        ),
+    ):
+        return
 
     source = {
         "claim_id": claim.get("claim_id"),
@@ -460,6 +518,44 @@ def _register_names(category: str, field: str) -> list[str]:
     if not registers:
         registers.append(REGISTER_OTHER)
     return list(dict.fromkeys(registers))
+
+
+def _claim_allowed_for_document(
+    field: str,
+    *,
+    category: str,
+    document_type: str,
+    value: str,
+    evidence_text: str,
+) -> bool:
+    if document_type in CONTRACT_DOCUMENT_TYPES:
+        if field in PERMIT_FIELDS or category in {"permit", "property"}:
+            return False
+    if field in PERMIT_FIELDS and not permit_claim_has_context(
+        field,
+        value=value,
+        evidence_text=evidence_text,
+        document_type=document_type,
+    ):
+        return False
+    return True
+
+
+def permit_claim_has_context(
+    field: str,
+    *,
+    value: str,
+    evidence_text: str,
+    document_type: str,
+) -> bool:
+    if field not in PERMIT_FIELDS:
+        return True
+    if document_type in PERMIT_DOCUMENT_TYPES:
+        return True
+    context = _normalize_value(f"{value} {evidence_text}")
+    if any(term in context for term in PERMIT_CONTEXT_TERMS):
+        return True
+    return False
 
 
 def _economic_summary(

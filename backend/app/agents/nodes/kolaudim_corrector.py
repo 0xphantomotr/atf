@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Literal
 
 from app.agents.claim_grounding import build_claim_evidence_catalog
@@ -106,6 +107,7 @@ def correct_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
         corrected,
         evidence_catalog=catalog,
     )
+    _apply_verification_replacements(normalized, verification)
     normalized["provider"] = ai_settings.get("provider")
     normalized["model"] = ai_settings.get("model")
     normalized["api_key_hint"] = ai_settings.get("api_key_hint")
@@ -153,6 +155,14 @@ def _publish_block_detail(issues: list[dict[str, Any]]) -> str:
 
 def _issue_detail(issue: dict[str, Any]) -> str:
     code = str(issue.get("code") or "verification_failed")
+    if code == "PUBLIC-DETAIL-MISSING":
+        field = str(issue.get("field") or "unknown_field")
+        required = _clip(str(issue.get("required_value") or ""))
+        sources = _source_list(issue.get("source_documents"))
+        parts = [f"{code}[field={field}", f"required={required or '-'}"]
+        if sources:
+            parts.append(f"sources={sources}")
+        return ", ".join(parts) + "]"
     if code != "PUBLIC-CONFLICT-ALTERNATIVE-USED":
         return code
 
@@ -205,7 +215,11 @@ def _build_correction_input(
         verification.get("correction_instructions", []),
         evidence_catalog,
     )
-    allowed_ids = cited_ids | supplemental_ids
+    issue_ids = _issue_evidence_ids(
+        verification.get("correction_instructions", []),
+        evidence_catalog,
+    )
+    allowed_ids = cited_ids | supplemental_ids | issue_ids
     allowed_catalog = {
         evidence_id: _compact_evidence(evidence_catalog[evidence_id])
         for evidence_id in sorted(allowed_ids)
@@ -228,6 +242,7 @@ def _build_correction_input(
                 "section_code": claim.get("section_code"),
                 "statement": claim.get("statement"),
                 "claim_type": claim.get("claim_type"),
+                "conclusion_level": claim.get("conclusion_level"),
                 "evidence_ids": claim.get("evidence_ids", []),
                 "confidence": claim.get("confidence"),
             }
@@ -244,6 +259,7 @@ def _build_correction_input(
         "correction_issues": verification.get("correction_instructions", []),
         "allowed_evidence_ids": sorted(allowed_ids),
         "supplemental_evidence_ids": sorted(supplemental_ids),
+        "issue_evidence_ids": sorted(issue_ids),
         "evidence_catalog": allowed_catalog,
         "instructions": [
             "Ruaj paragrafët e mbështetur dhe rendin profesional të seksioneve.",
@@ -264,6 +280,90 @@ def _build_correction_input(
         len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) // 3,
     )
     return payload
+
+
+def _apply_verification_replacements(
+    draft: dict[str, Any],
+    verification: dict[str, Any],
+) -> None:
+    issues = verification.get("correction_instructions", [])
+    if not isinstance(issues, list):
+        return
+    replacements = [
+        issue
+        for issue in issues
+        if isinstance(issue, dict)
+        and issue.get("code") == "PUBLIC-CONFLICT-ALTERNATIVE-USED"
+        and str(issue.get("selected_value") or "").strip()
+        and str(issue.get("alternative_value") or "").strip()
+    ]
+    if not replacements:
+        return
+
+    for issue in replacements:
+        selected = str(issue.get("selected_value") or "").strip()
+        alternative = str(issue.get("alternative_value") or "").strip()
+        evidence_ids = [
+            str(evidence_id)
+            for evidence_id in issue.get("evidence_ids", [])
+            if str(evidence_id).strip()
+        ]
+        for key in ("executive_summary", "signature_note"):
+            if isinstance(draft.get(key), str):
+                draft[key] = _replace_material_value(draft[key], alternative, selected)
+        sections = draft.get("sections")
+        if isinstance(sections, list):
+            for section in sections:
+                if not isinstance(section, dict):
+                    continue
+                for key in ("title", "body"):
+                    if isinstance(section.get(key), str):
+                        section[key] = _replace_material_value(
+                            section[key],
+                            alternative,
+                            selected,
+                        )
+        ledger = draft.get("claim_ledger")
+        if isinstance(ledger, list):
+            for claim in ledger:
+                if not isinstance(claim, dict) or not isinstance(claim.get("statement"), str):
+                    continue
+                statement = claim["statement"]
+                replaced = _replace_material_value(statement, alternative, selected)
+                if replaced == statement:
+                    continue
+                claim["statement"] = replaced
+                raw_ids = claim.get("evidence_ids")
+                if not isinstance(raw_ids, list):
+                    raw_ids = []
+                claim["evidence_ids"] = list(
+                    dict.fromkeys([*map(str, raw_ids), *evidence_ids])
+                )
+
+
+def _replace_material_value(text: str, alternative: str, selected: str) -> str:
+    if not alternative or not selected or alternative == selected:
+        return text
+    if alternative in text:
+        return text.replace(alternative, selected)
+    if re.fullmatch(r"\d+", alternative):
+        return re.sub(rf"(?<!\d){re.escape(alternative)}(?!\d)", selected, text)
+    return text
+
+
+def _issue_evidence_ids(
+    correction_issues: object,
+    evidence_catalog: dict[str, dict[str, Any]],
+) -> set[str]:
+    if not isinstance(correction_issues, list):
+        return set()
+    return {
+        str(evidence_id)
+        for issue in correction_issues
+        if isinstance(issue, dict)
+        for evidence_id in issue.get("evidence_ids", [])
+        if str(evidence_id) in evidence_catalog
+    }
 
 
 def _supplemental_evidence_ids(

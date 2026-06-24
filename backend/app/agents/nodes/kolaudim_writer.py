@@ -7,6 +7,7 @@ from app.agents.claim_grounding import (
     claim_source_references,
     register_evidence_id,
 )
+from app.agents.public_details import select_required_public_details
 from app.agents.llm import (
     LLMReviewError,
     kolaudim_draft_input_token_budget,
@@ -177,6 +178,28 @@ def _build_kolaudim_writer_input(
         "project_fallback_metadata": state.get("project", {}),
         "job": state.get("job", {}),
         "professional_dossier": dossier,
+        "required_public_details": select_required_public_details(raw_dossier),
+        "conclusion_policy": {
+            "levels": {
+                "proven": (
+                    "Fakt ose konkluzion që provohet drejtpërdrejt nga dokumentet "
+                    "e dosjes dhe evidence_ids."
+                ),
+                "qualified": (
+                    "Pohim i mbështetur pjesërisht ose inferencë profesionale që "
+                    "duhet të formulohet me kufizim/verifikim njerëzor."
+                ),
+                "not_proven": (
+                    "Fakt që nuk provohet; lejohet vetëm si mungesë/kufizim, jo si "
+                    "konkluzion pozitiv."
+                ),
+            },
+            "rule": (
+                "Konkluzionet për përfundim, përputhshmëri, matje, prova ose "
+                "përdorim duhet të jenë proven vetëm kur kanë evidencë të "
+                "drejtpërdrejtë; ndryshe qualified ose not_proven."
+            ),
+        },
         "specialist_memoranda": _compact_specialist_reviews(
             state.get("specialist_reviews")
         ),
@@ -193,6 +216,10 @@ def _build_kolaudim_writer_input(
             "mbetet në përputhje me regjistrat dhe faktet kanonike.",
             "Çdo paragraf publik duhet të ketë claim_type dhe evidence_ids. Përdor "
             "vetëm evidence_id që shfaqen në input.",
+            "Çdo paragraf publik duhet të ketë conclusion_level: proven, qualified "
+            "ose not_proven sipas conclusion_policy.",
+            "Përfshi vlerat e required_public_details në seksionet përkatëse kur "
+            "janë të provuara; mos i zëvendëso me përmbledhje të përgjithshme.",
             "documented_fact kërkon evidencë të drejtpërdrejtë; "
             "professional_inference duhet të mbështetet në evidencë dhe të mos "
             "paraqitet si matje ose inspektim fizik; qualification shpreh kufizim.",
@@ -305,6 +332,10 @@ def _shrink_writer_input(writer_input: dict[str, Any]) -> bool:
 
     dossier = writer_input.get("professional_dossier")
     specialist_memoranda = writer_input.get("specialist_memoranda")
+    required_details = writer_input.get("required_public_details")
+    if isinstance(required_details, list) and len(required_details) > 12:
+        required_details.pop()
+        return True
     if isinstance(specialist_memoranda, dict):
         if _shrink_specialist_memoranda(specialist_memoranda):
             return True
@@ -986,11 +1017,16 @@ def _normalize_grounded_paragraph(
     evidence_ids = list(
         dict.fromkeys(_string_list(value.get("evidence_ids"), limit=12))
     )
+    conclusion_level = _normalize_conclusion_level(
+        value.get("conclusion_level"),
+        claim_type=claim_type,
+    )
     return {
         "claim_id": claim_id,
         "section_code": section_code,
         "statement": statement,
         "claim_type": claim_type,
+        "conclusion_level": conclusion_level,
         "evidence_ids": evidence_ids,
         "confidence": _safe_float(value.get("confidence")),
         "source_references": claim_source_references(
@@ -1026,6 +1062,11 @@ def _writer_input_evidence_ids(writer_input: dict[str, Any]) -> list[str]:
     legal_basis = writer_input.get("legal_basis", {})
     if isinstance(legal_basis, dict):
         ids.extend(_string_list(legal_basis.get("evidence_ids")))
+    ids.extend(
+        str(item.get("evidence_id"))
+        for item in writer_input.get("required_public_details", [])
+        if isinstance(item, dict) and item.get("evidence_id")
+    )
     specialist = writer_input.get("specialist_memoranda", {})
     if isinstance(specialist, dict):
         for memorandum in specialist.get("memoranda", []):
@@ -1041,6 +1082,17 @@ def _writer_input_evidence_ids(writer_input: dict[str, Any]) -> list[str]:
                     if isinstance(statement, dict):
                         ids.extend(_string_list(statement.get("evidence_ids")))
     return list(dict.fromkeys(ids))
+
+
+def _normalize_conclusion_level(value: object, *, claim_type: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"proven", "qualified", "not_proven"}:
+        return normalized
+    if claim_type == "documented_fact":
+        return "proven"
+    if claim_type == "qualification":
+        return "qualified"
+    return "qualified"
 
 
 def _numbered_items(

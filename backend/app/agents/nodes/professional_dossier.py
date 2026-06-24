@@ -5,11 +5,14 @@ from datetime import datetime
 from typing import Any
 
 from app.agents.dossier_consolidation import (
+    CONTRACT_DOCUMENT_TYPES,
+    PERMIT_FIELDS,
     REGISTER_CHRONOLOGY,
     REGISTER_MATERIALS,
     REGISTER_TECHNICAL,
     canonical_field_name,
     consolidate_project_registers,
+    permit_claim_has_context,
 )
 from app.agents.state import AuditGraphState
 from app.files.status import is_parsed_status
@@ -1201,6 +1204,15 @@ def _add_persisted_analysis_candidates(
             value = " ".join(value.split()).strip(" ;,.")
             if len(value) < 2 or len(value) > 280:
                 continue
+            evidence = verified_evidence[0]
+            snippet = str(evidence.get("supporting_excerpt") or value)
+            if not _field_allowed_for_document(
+                field,
+                document,
+                value=value,
+                evidence=snippet,
+            ):
+                continue
             if any(
                 item.get("source_document") == filename
                 and _normalize_fact_value(field, str(item.get("value") or ""))
@@ -1209,8 +1221,6 @@ def _add_persisted_analysis_candidates(
             ):
                 continue
 
-            evidence = verified_evidence[0]
-            snippet = str(evidence.get("supporting_excerpt") or value)
             candidates[field].append(
                 {
                     "value": value,
@@ -1689,6 +1699,26 @@ def _normalize_fact_value(field: str, value: str) -> str:
     )
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
     return " ".join(normalized.split())
+
+
+def _field_allowed_for_document(
+    field: str,
+    document: dict[str, Any],
+    *,
+    value: str = "",
+    evidence: str = "",
+) -> bool:
+    document_type = str(document.get("document_type") or "")
+    if document_type in CONTRACT_DOCUMENT_TYPES and field in PERMIT_FIELDS:
+        return False
+    if field in PERMIT_FIELDS and not permit_claim_has_context(
+        field,
+        value=value,
+        evidence_text=evidence,
+        document_type=document_type,
+    ):
+        return False
+    return True
 
 
 def _normalize(value: str) -> str:

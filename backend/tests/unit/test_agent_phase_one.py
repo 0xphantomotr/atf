@@ -13,6 +13,7 @@ from app.agents.nodes.kolaudim_writer import (
     _build_kolaudim_writer_input,
     write_kolaudim_draft,
 )
+from app.agents.public_details import select_required_public_details
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
 from app.agents.nodes.professional_dossier import build_professional_dossier
@@ -419,6 +420,125 @@ def test_professional_dossier_uses_verified_persisted_analysis_claims() -> None:
     assert "contractor" not in dossier["canonical_facts"]
     assert dossier["summary"]["persisted_analysis_count"] == 1
     assert dossier["summary"]["persisted_claim_candidate_count"] == 1
+
+
+def test_professional_dossier_blocks_permit_facts_from_contract_analysis() -> None:
+    contract_id = uuid.uuid4()
+    start_id = uuid.uuid4()
+    permit_id = uuid.uuid4()
+    contract_claim_id = str(uuid.uuid4())
+    start_claim_id = str(uuid.uuid4())
+    permit_claim_id = str(uuid.uuid4())
+    state = {
+        "documents": [
+            {
+                "version_id": str(contract_id),
+                "original_filename": "0. Kontrate Mbikqyresin me z. Oltion Kaba.docx",
+                "parse_status": "parsed",
+                "document_type": "supervisor_contract",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Kontratë mbikëqyrjeje me nr. 558, datë 04.07.2025.",
+            },
+            {
+                "version_id": str(start_id),
+                "original_filename": "1.3 Proces Verbal Fillim OK.docx",
+                "parse_status": "parsed",
+                "document_type": "start_works_minutes",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Proces Verbal Fillim Punimesh Nr. 558.",
+            },
+            {
+                "version_id": str(permit_id),
+                "original_filename": "1.5 [1] Akt kontroll i ngritjes se kantierit.docx",
+                "parse_status": "parsed",
+                "document_type": "control_act",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Leje Ndërtimi Nr.01, Nr. 263/4 Prot., datë 07.03.2023.",
+            },
+        ],
+        "document_analyses": [
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "file_version_id": str(contract_id),
+                "claims": [
+                    {
+                        "claim_id": contract_claim_id,
+                        "field_name": "building_permit",
+                        "category": "permit",
+                        "original_value": "Nr. 558, datë 04.07.2025, AN020620250016",
+                        "confidence": 0.96,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 1,
+                                "supporting_excerpt": "Nr. 558, datë 04.07.2025",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "file_version_id": str(start_id),
+                "claims": [
+                    {
+                        "claim_id": start_claim_id,
+                        "field_name": "building_permit",
+                        "category": "permit",
+                        "original_value": "558",
+                        "confidence": 0.96,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 1,
+                                "supporting_excerpt": "Proces Verbal Fillim Punimesh Nr. 558",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "file_version_id": str(permit_id),
+                "claims": [
+                    {
+                        "claim_id": permit_claim_id,
+                        "field_name": "building_permit",
+                        "category": "permit",
+                        "original_value": "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+                        "confidence": 0.94,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 1,
+                                "supporting_excerpt": (
+                                    "Leje Ndërtimi Nr.01, Nr. 263/4 Prot., "
+                                    "datë 07.03.2023"
+                                ),
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        "extracted_facts": {},
+        "agent_trace": [],
+    }
+
+    dossier = build_professional_dossier(state)["professional_dossier"]
+
+    permit_fact = dossier["canonical_facts"]["construction_permit_number"]
+    assert permit_fact["value"] == "Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
+    assert permit_fact["source_documents"] == [
+        "1.5 [1] Akt kontroll i ngritjes se kantierit.docx"
+    ]
+    assert "Nr. 558" not in str(dossier["canonical_facts"])
+    assert '"558"' not in str(dossier["canonical_facts"])
+    assert "Nr. 558" not in str(dossier["registers"]["permits_property_licenses"])
+    assert '"558"' not in str(dossier["registers"]["permits_property_licenses"])
 
 
 def test_professional_dossier_scopes_document_and_stage_facts_out_of_canonical() -> None:
@@ -853,9 +973,56 @@ def test_writer_prefers_consolidated_registers_over_raw_excerpts() -> None:
     assert writer_input["document_evidence"] == []
     register = writer_input["professional_dossier"]["registers"]
     assert register["permits_property_licenses"][0]["value"] == "Nr. 42"
+    assert writer_input["required_public_details"][0]["value"] == "Nr. 42"
+    assert writer_input["required_public_details"][0]["evidence_id"] == (
+        "permits_property_licenses:0"
+    )
     specialist = writer_input["specialist_memoranda"]["memoranda"][0]
     assert specialist["established_facts"][0]["statement"].startswith("Leja nr. 42")
     assert "Ky tekst i papërpunuar" not in str(writer_input)
+
+
+def test_required_public_details_skip_stakeholders_and_normalize_permit_alias() -> None:
+    details = select_required_public_details(
+        {
+            "registers": {
+                "permits_property_licenses": [
+                    {
+                        "field_name": "building_permit",
+                        "value": "Nr.01, Nr. 263/4 Prot.",
+                    },
+                    {
+                        "field_name": "construction_permit_number",
+                        "value": "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+                    }
+                ],
+                "contracts_and_economics": [
+                    {
+                        "field_name": "contractor",
+                        "value": "SHOQERIA:“EB-2000” shpk",
+                    },
+                    {
+                        "field_name": "contractor_legal_representative",
+                        "value": "Lumturi BEQIRAJ",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert details == [
+        {
+            "evidence_id": "permits_property_licenses:1",
+            "group": "permit_property",
+            "register": "permits_property_licenses",
+            "field_name": "construction_permit_number",
+            "value": "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+            "priority": 1,
+            "must_include": True,
+            "confidence_level": None,
+            "source_documents": [],
+        }
+    ]
 
 
 def test_claim_verifier_accepts_clean_human_style_act() -> None:
@@ -897,6 +1064,7 @@ def test_claim_verifier_accepts_clean_human_style_act() -> None:
                     "section_code": "executive_summary",
                     "statement": summary,
                     "claim_type": "documented_fact",
+                    "conclusion_level": "proven",
                     "confidence": 0.9,
                     "evidence_ids": [
                         "canonical:object_name",
@@ -910,6 +1078,7 @@ def test_claim_verifier_accepts_clean_human_style_act() -> None:
                         "section_code": f"section_{index}",
                         "statement": section_body,
                         "claim_type": "documented_fact",
+                        "conclusion_level": "proven",
                         "confidence": 0.9,
                         "evidence_ids": [
                             "canonical:contractor",

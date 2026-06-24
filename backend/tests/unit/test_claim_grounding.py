@@ -4,8 +4,10 @@ import pytest
 
 from app.agents.claim_grounding import build_claim_evidence_catalog
 from app.agents.nodes.claim_verifier import verify_kolaudim_claims
+from app.agents.nodes.claim_verifier import _material_value_present
 from app.agents.nodes.kolaudim_corrector import (
     ClaimVerificationError,
+    _apply_verification_replacements,
     correct_kolaudim_draft,
     enforce_publishable_kolaudim,
     route_after_claim_verification,
@@ -85,6 +87,7 @@ def _draft_with_paragraphs() -> dict:
         "executive_summary": {
             "text": "Akti lidhet me objektin Godinë banimi.",
             "claim_type": "documented_fact",
+            "conclusion_level": "proven",
             "evidence_ids": ["canonical:object_name"],
             "confidence": 0.9,
         },
@@ -96,6 +99,7 @@ def _draft_with_paragraphs() -> dict:
                     {
                         "text": "Dosja përmban evidencë teknike për punimet.",
                         "claim_type": "documented_fact",
+                        "conclusion_level": "proven",
                         "evidence_ids": ["technical_works:0"],
                         "confidence": 0.85,
                     }
@@ -125,6 +129,7 @@ def test_normalizer_builds_internal_claim_ledger_and_clean_body() -> None:
     assert normalized["claim_ledger"][0]["evidence_ids"] == [
         "canonical:object_name"
     ]
+    assert normalized["claim_ledger"][0]["conclusion_level"] == "proven"
     assert normalized["claim_ledger"][0]["source_references"][0][
         "file_version_id"
     ] == state["documents"][0]["version_id"]
@@ -150,6 +155,7 @@ def test_verifier_rejects_sensitive_conclusion_without_full_evidence() -> None:
     response["sections"][0]["paragraphs"][0] = {
         "text": "Objekti është i përshtatshëm për shfrytëzim.",
         "claim_type": "professional_inference",
+        "conclusion_level": "proven",
         "evidence_ids": ["declarations_and_conclusions:0"],
         "confidence": 0.6,
     }
@@ -172,6 +178,7 @@ def test_verifier_rejects_conformity_without_declaration_and_technical_evidence(
     response["sections"][0]["paragraphs"][0] = {
         "text": "Punimet janë kryer në përputhje me projektin e zbatimit.",
         "claim_type": "professional_inference",
+        "conclusion_level": "proven",
         "evidence_ids": ["technical_works:0"],
         "confidence": 0.7,
     }
@@ -197,6 +204,7 @@ def test_verifier_accepts_conformity_with_declaration_and_technical_evidence() -
             "përputhshmërinë e dokumentuar të punimeve me projektin."
         ),
         "claim_type": "professional_inference",
+        "conclusion_level": "proven",
         "evidence_ids": ["technical_works:0", "declarations_and_conclusions:0"],
         "confidence": 0.75,
     }
@@ -218,6 +226,7 @@ def test_verifier_rejects_unsigned_authorization_language() -> None:
     response["sections"][0]["paragraphs"][0] = {
         "text": "Struktura është e pranuar dhe autorizohet për përdorim.",
         "claim_type": "professional_inference",
+        "conclusion_level": "proven",
         "evidence_ids": [
             "technical_works:0",
             "materials_and_tests:0",
@@ -244,6 +253,7 @@ def test_verifier_rejects_final_acceptance_language() -> None:
     response["sections"][0]["paragraphs"][0] = {
         "text": "Punimet janë pranuar dhe struktura është funksionale.",
         "claim_type": "professional_inference",
+        "conclusion_level": "proven",
         "evidence_ids": [
             "technical_works:0",
             "materials_and_tests:0",
@@ -260,6 +270,133 @@ def test_verifier_rejects_final_acceptance_language() -> None:
 
     assert result["status"] == "needs_correction"
     assert "CLAIM-UNSIGNED-AUTHORIZATION" in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
+def test_verifier_rejects_qualified_claim_without_limiting_language() -> None:
+    state = _grounded_state()
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": "Punimet janë kryer në përputhje me projektin e zbatimit.",
+        "claim_type": "professional_inference",
+        "conclusion_level": "qualified",
+        "evidence_ids": ["technical_works:0", "declarations_and_conclusions:0"],
+        "confidence": 0.7,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert "CLAIM-CONCLUSION-LEVEL-LANGUAGE" in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
+def test_verifier_accepts_qualified_claim_with_limiting_language() -> None:
+    state = _grounded_state()
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": (
+            "Nga dokumentacioni rezulton një bazë e pjesshme për përputhshmëri, "
+            "por mbetet për t'u verifikuar nga palët nënshkruese."
+        ),
+        "claim_type": "qualification",
+        "conclusion_level": "qualified",
+        "evidence_ids": ["technical_works:0"],
+        "confidence": 0.6,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert "CLAIM-CONCLUSION-LEVEL-LANGUAGE" not in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
+def test_verifier_requires_must_include_public_detail() -> None:
+    state = _grounded_state()
+    version_id = state["documents"][0]["version_id"]
+    state["professional_dossier"]["registers"]["permits_property_licenses"] = [
+        {
+            "field_name": "construction_permit_number",
+            "value": "Leje Ndërtimi Nr. 42",
+            "source_documents": ["leje.pdf"],
+            "sources": [_source(version_id, "leje.pdf")],
+        }
+    ]
+    response = _draft_with_paragraphs()
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    detail_issue = next(
+        issue
+        for issue in result["issues"]
+        if issue["code"] == "PUBLIC-DETAIL-MISSING"
+    )
+    assert detail_issue["field"] == "construction_permit_number"
+    assert detail_issue["evidence_ids"] == ["permits_property_licenses:0"]
+
+
+def test_material_value_present_matches_compact_area_and_permit_variants() -> None:
+    public_text = (
+        "Objekti është pajisur me Leje Ndërtimi Nr. 01, Nr. 263/4 Prot., "
+        "datë 07.03.2023. Sipërfaqja është 94.7 m2, prej të cilave 54 m2 podrum."
+    )
+
+    assert _material_value_present(
+        "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+        public_text,
+    )
+    assert _material_value_present("94.7(54m2 podrum)", public_text)
+
+
+def test_verifier_does_not_treat_equivalent_permit_prefix_as_conflict() -> None:
+    state = _grounded_state()
+    state["professional_dossier"]["canonical_facts"][
+        "construction_permit_number"
+    ] = {
+        "value": "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+        "source_documents": ["akt.docx"],
+    }
+    state["professional_dossier"]["conflicts"] = [
+        {
+            "field": "construction_permit_number",
+            "selected_value": "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+            "alternatives": [
+                {
+                    "value": "LEJE Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+                    "source_documents": ["leje.docx"],
+                }
+            ],
+        }
+    ]
+    response = _draft_with_paragraphs()
+    response["executive_summary"]["text"] = (
+        "Objekti ka LEJE Nr.01, Nr. 263/4 Prot., datë 07.03.2023."
+    )
+    response["executive_summary"]["evidence_ids"] = [
+        "canonical:construction_permit_number"
+    ]
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert "PUBLIC-CONFLICT-ALTERNATIVE-USED" not in {
         issue["code"] for issue in result["issues"]
     }
 
@@ -326,6 +463,46 @@ def test_corrector_runs_once_and_replaces_draft(monkeypatch) -> None:
     ]
     assert "declarations_and_conclusions:0" in captured_inputs[0][
         "allowed_evidence_ids"
+    ]
+
+
+def test_correction_replacement_backstop_replaces_conflict_alternative() -> None:
+    draft = {
+        "executive_summary": "Leja e ndërtimit është 558.",
+        "sections": [
+            {
+                "title": "Lejet",
+                "body": "Objekti referon lejen nr. 558 në dokumentacion.",
+            }
+        ],
+        "claim_ledger": [
+            {
+                "claim_id": "section_0:0",
+                "statement": "Objekti referon lejen nr. 558 në dokumentacion.",
+                "evidence_ids": ["conflict:0"],
+            }
+        ],
+    }
+    verification = {
+        "correction_instructions": [
+            {
+                "code": "PUBLIC-CONFLICT-ALTERNATIVE-USED",
+                "field": "construction_permit_number",
+                "selected_value": "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+                "alternative_value": "558",
+                "evidence_ids": ["canonical:construction_permit_number"],
+            }
+        ]
+    }
+
+    _apply_verification_replacements(draft, verification)
+
+    assert "558" not in draft["executive_summary"]
+    assert "558" not in draft["sections"][0]["body"]
+    assert "Nr.01, Nr. 263/4 Prot., datë 07.03.2023" in draft["sections"][0]["body"]
+    assert draft["claim_ledger"][0]["evidence_ids"] == [
+        "conflict:0",
+        "canonical:construction_permit_number",
     ]
 
 

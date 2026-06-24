@@ -90,11 +90,20 @@ Rregulla të detyrueshme:
 - Dallo qartë çfarë rezulton nga dokumentet nga çdo konstatim fizik. Mos thuaj se
   sistemi kreu vizitë, matje apo provë në terren.
 - Çdo paragraf duhet të jetë objekt i strukturuar me text, claim_type, evidence_ids
-  dhe confidence.
+  conclusion_level dhe confidence.
 - Përdor vetëm evidence_ids që janë dhënë në input. Mos krijo identifikues të rinj.
 - documented_fact përdoret vetëm për fakt të shprehur drejtpërdrejt në evidencë;
   professional_inference për vlerësim të kufizuar që rrjedh nga evidenca; qualification
   për mungesë, konflikt ose kufizim të provueshmërisë.
+- conclusion_level duhet të jetë:
+  proven vetëm kur paragrafi mbështetet drejtpërdrejt nga dokumentet;
+  qualified kur evidenca është e pjesshme ose kërkon verifikim profesional;
+  not_proven kur fakti nuk provohet dhe nuk duhet të shfaqet si konkluzion pozitiv.
+- Paragrafët qualified ose not_proven duhet të kenë gjuhë kufizuese të qartë, jo
+  konkluzion pozitiv të maskuar.
+- Përfshi në trup vlerat e dhëna te required_public_details kur janë të pranishme:
+  leje/protokolle, zonë kadastrale/pronë, kontrata/vlera/afate, data fazash,
+  sipërfaqe/parametra dhe materiale/prova.
 - Mos shkruaj paragraf publik që nuk mund ta lidhësh me të paktën një evidence_id.
 - Nëse një fakt material nuk provohet, mos e zëvendëso me placeholder. Formuloje
   kufizimin vetëm në paragrafin përkatës ose në konkluzion dhe regjistroje shkurt te
@@ -124,7 +133,11 @@ Rregulla të detyrueshme:
 - Zbato vetëm correction_issues e dhëna dhe ruaj përmbajtjen e mbështetur.
 - Hiq ose kualifiko çdo pretendim të pambështetur; mos kërko evidencë të re.
 - Përdor vetëm allowed_evidence_ids dhe mos krijo identifikues të rinj.
-- Çdo paragraf duhet të ketë text, claim_type, confidence dhe të paktën një evidence_id.
+- Çdo paragraf duhet të ketë text, claim_type, conclusion_level, confidence dhe të
+  paktën një evidence_id.
+- conclusion_level proven përdoret vetëm për fakte të provuara drejtpërdrejt;
+  qualified për pretendime të pjesshme/me verifikim njerëzor; not_proven për mungesë
+  prove pa konkluzion pozitiv.
 - Mos deklaro inspektim fizik, matje në terren, prova, përfundim, konformitet ose
   përshtatshmëri për përdorim kur evidenca e lejuar nuk e provon drejtpërdrejt.
 - Hiq çdo formulim që autorizon përdorim/shfrytëzim ose pranim përfundimtar,

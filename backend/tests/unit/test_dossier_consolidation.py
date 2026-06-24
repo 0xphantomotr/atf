@@ -49,6 +49,7 @@ def _claim(
     normalized_value: str = "",
     verified: bool = True,
     chunk_index: int = 0,
+    supporting_excerpt: str | None = None,
 ) -> dict:
     return {
         "claim_id": str(uuid.uuid4()),
@@ -65,7 +66,7 @@ def _claim(
                 "page_start": chunk_index + 1,
                 "page_end": chunk_index + 1,
                 "coordinates": {"page_number": chunk_index + 1},
-                "supporting_excerpt": value,
+                "supporting_excerpt": supporting_excerpt or value,
                 "excerpt_verified": verified,
             }
         ],
@@ -200,6 +201,113 @@ def test_consolidation_uses_version_identity_for_same_name_documents() -> None:
     assert result["evidence_coverage"]["eligible_document_count"] == 1
 
 
+def test_consolidation_blocks_permit_claims_from_contract_documents() -> None:
+    contract_id = uuid.uuid4()
+    permit_id = uuid.uuid4()
+    contract = _document(
+        contract_id,
+        "0. Kontrate Mbikqyresin.docx",
+        "supervisor_contract",
+    )
+    permit = _document(permit_id, "1.5 Akt kontroll kantieri.docx", "control_act")
+
+    result = consolidate_project_registers(
+        analyses=[
+            _analysis(
+                contract_id,
+                contract["sha256_hash"],
+                [
+                    _claim(
+                        "building_permit",
+                        "Nr. 558, datë 04.07.2025, AN020620250016",
+                        category="permit",
+                    ),
+                ],
+            ),
+            _analysis(
+                permit_id,
+                permit["sha256_hash"],
+                [
+                    _claim(
+                        "building_permit",
+                        "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+                        category="permit",
+                        supporting_excerpt=(
+                            "Leje Ndërtimi Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
+                        ),
+                    ),
+                ],
+            ),
+        ],
+        documents=[contract, permit],
+        document_records=[
+            _record(
+                "0. Kontrate Mbikqyresin.docx",
+                "supervisor_contract",
+                version_id=contract_id,
+            ),
+            _record("1.5 Akt kontroll kantieri.docx", "control_act", version_id=permit_id),
+        ],
+        canonical_facts={},
+    )
+
+    permits = result["registers"][REGISTER_PERMITS]
+    assert len(permits) == 1
+    assert permits[0]["field_name"] == "construction_permit_number"
+    assert permits[0]["value"] == "Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
+    assert permits[0]["source_documents"] == ["1.5 Akt kontroll kantieri.docx"]
+    assert "Nr. 558" not in str(result)
+
+
+def test_consolidation_rejects_bare_permit_number_from_process_minutes() -> None:
+    start_id = uuid.uuid4()
+    control_id = uuid.uuid4()
+    start = _document(start_id, "1.3 Proces Verbal Fillim OK.docx", "start_works_minutes")
+    control = _document(control_id, "1.5 [1] Akt kontroll kantieri.docx", "control_act")
+
+    result = consolidate_project_registers(
+        analyses=[
+            _analysis(
+                start_id,
+                start["sha256_hash"],
+                [
+                    _claim(
+                        "building_permit",
+                        "558",
+                        category="permit",
+                        supporting_excerpt="Proces Verbal Fillim Punimesh Nr. 558",
+                    ),
+                ],
+            ),
+            _analysis(
+                control_id,
+                control["sha256_hash"],
+                [
+                    _claim(
+                        "building_permit",
+                        "Nr.01, Nr. 263/4 Prot., datë 07.03.2023",
+                        category="permit",
+                        supporting_excerpt=(
+                            "Leje Ndërtimi Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
+                        ),
+                    ),
+                ],
+            ),
+        ],
+        documents=[start, control],
+        document_records=[
+            _record("1.3 Proces Verbal Fillim OK.docx", "start_works_minutes", version_id=start_id),
+            _record("1.5 [1] Akt kontroll kantieri.docx", "control_act", version_id=control_id),
+        ],
+        canonical_facts={},
+    )
+
+    permits = result["registers"][REGISTER_PERMITS]
+    assert len(permits) == 1
+    assert permits[0]["value"] == "Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
+    assert "558" not in str(result)
+
+
 def test_consolidation_calculates_economic_variance_and_chronology_integrity() -> None:
     result = consolidate_project_registers(
         analyses=[],
@@ -258,7 +366,9 @@ def test_consolidation_reports_incomplete_current_version_coverage() -> None:
 
 def test_canonical_field_aliases_are_project_agnostic() -> None:
     assert canonical_field_name("building permit number") == "construction_permit_number"
+    assert canonical_field_name("construction_permit") == "construction_permit_number"
     assert canonical_field_name("Construction Company") == "contractor"
+    assert canonical_field_name("contractor_name") == "contractor"
     assert canonical_field_name("Total Construction Area") == "total_construction_area"
     assert canonical_field_name("emri_objektit") == "object_name"
     assert canonical_field_name("sipermarresi") == "contractor"
