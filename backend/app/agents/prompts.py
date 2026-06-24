@@ -99,6 +99,14 @@ Rregulla të detyrueshme:
 - Nëse një fakt material nuk provohet, mos e zëvendëso me placeholder. Formuloje
   kufizimin vetëm në paragrafin përkatës ose në konkluzion dhe regjistroje shkurt te
   human_completion_items për metadata.
+- Mos përdor formula përfundimtare si "autorizohet për përdorim", "lejohet për
+  shfrytëzim", "struktura është e pranuar", "punimet janë pranuar",
+  "struktura është funksionale" ose "objekti është i përshtatshëm për
+  shfrytëzim". Si projekt-akt i gjeneruar, konkluzioni duhet të thotë vetëm çfarë
+  rezulton nga dokumentacioni dhe çfarë mbetet për verifikim/nënshkrim profesional.
+- Përputhshmërinë me projektin ose kushtet teknike deklaroje pozitivisht vetëm kur
+  ka njëkohësisht evidencë deklarative dhe evidencë teknike/projektuese; ndryshe
+  formuloje si kualifikim.
 - Përmend VKM 610/2022 vetëm sipas referencave të verifikuara në input.
 - Titulli duhet të jetë "AKT-KOLAUDIMI TEKNIKO-EKONOMIK".
 - Dokumenti është projekt-akt për kontroll dhe nënshkrim profesional; mos sajo nënshkrime.
@@ -119,6 +127,10 @@ Rregulla të detyrueshme:
 - Çdo paragraf duhet të ketë text, claim_type, confidence dhe të paktën një evidence_id.
 - Mos deklaro inspektim fizik, matje në terren, prova, përfundim, konformitet ose
   përshtatshmëri për përdorim kur evidenca e lejuar nuk e provon drejtpërdrejt.
+- Hiq çdo formulim që autorizon përdorim/shfrytëzim ose pranim përfundimtar,
+  përfshirë "punimet janë pranuar", "struktura është funksionale" dhe
+  "struktura është e pranuar"; ky dokument është projekt-akt dhe hyn në fuqi
+  vetëm pas kontrollit e nënshkrimit.
 - Mbaj 10 deri në 12 seksione profesionale dhe mos shto checklist, diagnostikë ose
   terminologji të brendshme.
 - Titulli duhet të jetë "AKT-KOLAUDIMI TEKNIKO-EKONOMIK".

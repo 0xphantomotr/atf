@@ -96,6 +96,9 @@ FIELD_ALIASES = {
     "kontrata_mbikqyresin": "supervisor_contract_reference",
     "kontrata_mbikeqyresit": "supervisor_contract_reference",
     "kontrata_kolaudatorit": "kolaudator_contract_reference",
+    "kontrata_kolaudatorin": "kolaudator_contract_reference",
+    "kontrate_kolaudatorit": "kolaudator_contract_reference",
+    "kontrate_kolaudatorin": "kolaudator_contract_reference",
 }
 
 STAKEHOLDER_FIELDS = {

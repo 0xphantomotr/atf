@@ -1,6 +1,6 @@
 # Akt Kolaudimi Improvement Roadmap
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 ## Objective
 
@@ -42,6 +42,9 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
 - [x] Albanian aliases such as `emri_objektit`, `sipermarresi`,
   `kontrata_sipermarrjes`, `date_of_document` and `element_name` normalized before
   dossier consolidation.
+- [x] Targeted role/contract extraction for kolaudator, supervisor and contractor
+  contracts even when document-analysis cache is already present.
+- [x] Contract reference extraction for Albanian notarial `Rep./Kol.` formats.
 - [x] Exclusion of foreign-project and unverified style-reference evidence.
 - [x] Dynamic input fitting based on the selected model's context budget.
 
@@ -57,13 +60,17 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
   source documents when publication is blocked.
 - [x] Publish gate blocks material party/permit conflicts while treating object-name
   wording variants as diagnostic unless stronger evidence marks a foreign project.
+- [x] Professional conclusion guard rejects unsigned authorization/use-approval language
+  and requires both declaration-level and technical/project evidence for conformity.
+- [x] Professional conclusion guard also rejects generated final-acceptance wording such
+  as `punimet janë pranuar` and `struktura është funksionale`.
 - [x] Failed specialist calls preserve deterministic evidence packets.
 
 ### Verification baseline
 
 - [x] Unit coverage for parsing, document analysis, dossier consolidation, specialist
   review, model budgeting and Akt generation.
-- [x] Latest complete test run: 95 passed, 1 skipped.
+- [x] Latest complete test run: 104 passed, 1 skipped.
 - [x] `.env`, API keys and local human reference documents excluded from commits.
 
 ## Completed Milestone: Claim-Grounded Finalization
@@ -88,6 +95,9 @@ an unsupported conclusion more convincingly.
 - [x] Include selected and alternative source documents in conflict correction
   instructions.
 - [x] Run at most one correction pass, then verify the revised draft again.
+- [x] Give the correction pass bounded supplemental evidence for failed conformity,
+  completion, measurement, testing and suitability claims instead of limiting it to
+  the bad draft's incomplete citations.
 - [x] Render only the verified revision; keep the evidence ledger internal.
 - [x] Never return an older successful PDF when the latest generation fails.
 

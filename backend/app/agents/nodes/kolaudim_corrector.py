@@ -12,6 +12,31 @@ class ClaimVerificationError(RuntimeError):
     pass
 
 
+MAX_SUPPLEMENTAL_EVIDENCE_PER_REGISTER = 8
+ISSUE_SUPPORT_REGISTERS: dict[str, set[str]] = {
+    "CLAIM-COMPLETION-EVIDENCE": {
+        "construction_chronology",
+        "declarations_and_conclusions",
+    },
+    "CLAIM-CONFORMITY-EVIDENCE": {
+        "declarations_and_conclusions",
+        "project_parameters",
+        "technical_works",
+    },
+    "CLAIM-MEASUREMENT-EVIDENCE": {
+        "declarations_and_conclusions",
+        "project_parameters",
+        "technical_works",
+    },
+    "CLAIM-TEST-EVIDENCE": {"materials_and_tests"},
+    "CLAIM-SUITABILITY-EVIDENCE": {
+        "declarations_and_conclusions",
+        "materials_and_tests",
+        "technical_works",
+    },
+}
+
+
 def route_after_claim_verification(
     state: AuditGraphState,
 ) -> Literal["correct", "finalize"]:
@@ -176,9 +201,14 @@ def _build_correction_input(
         for evidence_id in claim.get("evidence_ids", [])
         if str(evidence_id) in evidence_catalog
     }
+    supplemental_ids = _supplemental_evidence_ids(
+        verification.get("correction_instructions", []),
+        evidence_catalog,
+    )
+    allowed_ids = cited_ids | supplemental_ids
     allowed_catalog = {
         evidence_id: _compact_evidence(evidence_catalog[evidence_id])
-        for evidence_id in sorted(cited_ids)
+        for evidence_id in sorted(allowed_ids)
     }
     public_draft = {
         "title": draft.get("title"),
@@ -212,12 +242,16 @@ def _build_correction_input(
     payload = {
         "current_draft": public_draft,
         "correction_issues": verification.get("correction_instructions", []),
-        "allowed_evidence_ids": sorted(cited_ids),
+        "allowed_evidence_ids": sorted(allowed_ids),
+        "supplemental_evidence_ids": sorted(supplemental_ids),
         "evidence_catalog": allowed_catalog,
         "instructions": [
             "Ruaj paragrafët e mbështetur dhe rendin profesional të seksioneve.",
-            "Për çdo çështje hiq pretendimin ose ktheje në kualifikim të saktë.",
-            "Mos shto fakt, evidencë ose seksion të ri.",
+            "Për çdo çështje hiq pretendimin, ktheje në kualifikim të saktë ose "
+            "plotëso evidence_ids vetëm nga allowed_evidence_ids kur pretendimi "
+            "mbështetet nga evidenca shtesë.",
+            "Mos shto fakt ose seksion të ri; përdor evidencë shtesë vetëm për të "
+            "mbështetur tekstin ekzistues ose për ta kualifikuar.",
         ],
         "budget": {
             "provider": ai_settings.get("provider"),
@@ -232,6 +266,35 @@ def _build_correction_input(
     return payload
 
 
+def _supplemental_evidence_ids(
+    correction_issues: object,
+    evidence_catalog: dict[str, dict[str, Any]],
+) -> set[str]:
+    if not isinstance(correction_issues, list):
+        return set()
+    requested_registers: set[str] = set()
+    for issue in correction_issues:
+        if not isinstance(issue, dict):
+            continue
+        requested_registers.update(
+            ISSUE_SUPPORT_REGISTERS.get(str(issue.get("code") or ""), set())
+        )
+    if not requested_registers:
+        return set()
+
+    selected: set[str] = set()
+    counts = {register: 0 for register in requested_registers}
+    for evidence_id, item in evidence_catalog.items():
+        register = str(item.get("register") or "")
+        if register not in requested_registers:
+            continue
+        if counts[register] >= MAX_SUPPLEMENTAL_EVIDENCE_PER_REGISTER:
+            continue
+        selected.add(evidence_id)
+        counts[register] += 1
+    return selected
+
+
 def _compact_evidence(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": item.get("kind"),
@@ -241,4 +304,21 @@ def _compact_evidence(item: dict[str, Any]) -> dict[str, Any]:
         "law_reference": item.get("law_reference"),
         "description": item.get("description"),
         "selected_value": item.get("selected_value"),
+        "source_documents": _compact_source_documents(item.get("source_references")),
     }
+
+
+def _compact_source_documents(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for source in value:
+        if not isinstance(source, dict):
+            continue
+        name = str(source.get("source_document") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names[:3]

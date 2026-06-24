@@ -20,6 +20,20 @@ PHYSICAL_INSPECTION_PATTERN = re.compile(
     r"\bu konstatua\s+ne\s+terren|\bmatjet\s+e\s+kryera\s+nga\s+kolaudatori",
     re.I,
 )
+UNSIGNED_AUTHORIZATION_PATTERN = re.compile(
+    r"\b(?:autorizohet|lejohet|miratohet|pranohet)\s+(?:per\s+)?"
+    r"(?:perdorim|shfrytezim)\b|"
+    r"\bstruktura\s+eshte\s+(?:e\s+pranuar|funksionale)\b|"
+    r"\bpunimet\s+jane\s+pranuar\b|"
+    r"\bobjekti\s+eshte\s+(?:i\s+pranuar|funksional)\b",
+    re.I,
+)
+LIMITING_STATEMENT_PATTERN = re.compile(
+    r"\b(?:nuk\s+(?:rezulton|provohet|vertetohet|konfirmohet)|"
+    r"pa\s+u\s+verifikuar|kerkon\s+verifikim|duhet\s+verifikuar|"
+    r"me\s+rezerv[eë]|e\s+kufizuar|projekt-akt)\b",
+    re.I,
+)
 CORE_PUBLIC_FACTS = (
     "object_name",
     "location",
@@ -73,15 +87,13 @@ SENSITIVE_CLAIMS: tuple[
         "CLAIM-CONFORMITY-EVIDENCE",
         re.compile(r"\b(?:konform|ne perputhje me|perputhet me)\b", re.I),
         (
-            frozenset(
-                {
-                    "declarations_and_conclusions",
-                    "technical_works",
-                    "project_parameters",
-                }
-            ),
+            frozenset({"declarations_and_conclusions"}),
+            frozenset({"technical_works", "project_parameters"}),
         ),
-        "Përputhshmëria kërkon evidencë teknike ose deklaratë të dokumentuar.",
+        (
+            "Përputhshmëria kërkon njëkohësisht evidencë deklarative dhe "
+            "evidencë teknike/projektuese; ndryshe formuloje si kualifikim."
+        ),
     ),
     (
         "CLAIM-MEASUREMENT-EVIDENCE",
@@ -456,9 +468,25 @@ def _verify_claim(
             )
         )
 
+    if UNSIGNED_AUTHORIZATION_PATTERN.search(normalized_statement):
+        issues.append(
+            _issue(
+                "CLAIM-UNSIGNED-AUTHORIZATION",
+                "major",
+                (
+                    "Projekt-akti i gjeneruar nuk mund të autorizojë përdorim, "
+                    "shfrytëzim ose pranim përfundimtar pa kontroll dhe nënshkrim "
+                    "profesional."
+                ),
+                claim_id,
+            )
+        )
+
     evidence_registers = _evidence_registers(evidence_ids, catalog)
     for code, pattern, required_groups, message in SENSITIVE_CLAIMS:
         if not pattern.search(normalized_statement):
+            continue
+        if _is_limiting_statement(normalized_statement, claim_type):
             continue
         if all(evidence_registers.isdisjoint(group) for group in required_groups):
             issues.append(_issue(code, "major", message, claim_id))
@@ -469,6 +497,12 @@ def _verify_claim(
         )
         if missing_group is not None:
             issues.append(_issue(code, "major", message, claim_id))
+
+
+def _is_limiting_statement(normalized_statement: str, claim_type: str) -> bool:
+    return claim_type == "qualification" or bool(
+        LIMITING_STATEMENT_PATTERN.search(normalized_statement)
+    )
 
 
 def _evidence_registers(

@@ -544,6 +544,47 @@ def test_professional_dossier_scopes_document_and_stage_facts_out_of_canonical()
     )
 
 
+def test_professional_dossier_extracts_kolaudator_contract_role_from_filename_with_cached_analysis() -> None:
+    version_id = uuid.uuid4()
+    state = {
+        "documents": [
+            {
+                "version_id": str(version_id),
+                "original_filename": "0. Kontrate Kolaudatorin me z.Naqe Bala.docx",
+                "parse_status": "parsed",
+                "document_type": "contract_and_related_acts",
+                "classification_confidence": 0.94,
+                "text_excerpt": (
+                    "Kontratë shërbimi kolaudimi. "
+                    "Nr. repertori 4519, Nr. koleksioni 2115, datë 17.09.2025."
+                ),
+            }
+        ],
+        "document_analyses": [
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "file_version_id": str(version_id),
+                "claims": [],
+            }
+        ],
+        "extracted_facts": {},
+        "agent_trace": [],
+    }
+
+    dossier = build_professional_dossier(state)["professional_dossier"]
+
+    assert dossier["canonical_facts"]["kolaudator"]["value"] == "z. Naqe Bala"
+    assert dossier["canonical_facts"]["kolaudator"]["evidence"][0][
+        "source_file_version_id"
+    ] == str(version_id)
+    assert dossier["scoped_facts"]["contract_references"][0]["field_name"] == (
+        "kolaudator_contract_reference"
+    )
+    assert dossier["scoped_facts"]["contract_references"][0]["value"] == (
+        "Nr. Rep. 4519, Nr. Kol. 2115, datë 17.09.2025"
+    )
+
+
 def test_professional_dossier_rejects_narrative_as_designer_identity() -> None:
     state = {
         "agent_trace": [],

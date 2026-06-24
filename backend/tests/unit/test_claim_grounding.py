@@ -166,6 +166,104 @@ def test_verifier_rejects_sensitive_conclusion_without_full_evidence() -> None:
     }
 
 
+def test_verifier_rejects_conformity_without_declaration_and_technical_evidence() -> None:
+    state = _grounded_state()
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": "Punimet janë kryer në përputhje me projektin e zbatimit.",
+        "claim_type": "professional_inference",
+        "evidence_ids": ["technical_works:0"],
+        "confidence": 0.7,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert result["status"] == "needs_correction"
+    assert "CLAIM-CONFORMITY-EVIDENCE" in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
+def test_verifier_accepts_conformity_with_declaration_and_technical_evidence() -> None:
+    state = _grounded_state()
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": (
+            "Dokumentacioni teknik dhe deklarata përkatëse mbështesin "
+            "përputhshmërinë e dokumentuar të punimeve me projektin."
+        ),
+        "claim_type": "professional_inference",
+        "evidence_ids": ["technical_works:0", "declarations_and_conclusions:0"],
+        "confidence": 0.75,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert "CLAIM-CONFORMITY-EVIDENCE" not in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
+def test_verifier_rejects_unsigned_authorization_language() -> None:
+    state = _grounded_state()
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": "Struktura është e pranuar dhe autorizohet për përdorim.",
+        "claim_type": "professional_inference",
+        "evidence_ids": [
+            "technical_works:0",
+            "materials_and_tests:0",
+            "declarations_and_conclusions:0",
+        ],
+        "confidence": 0.7,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert result["status"] == "needs_correction"
+    assert "CLAIM-UNSIGNED-AUTHORIZATION" in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
+def test_verifier_rejects_final_acceptance_language() -> None:
+    state = _grounded_state()
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": "Punimet janë pranuar dhe struktura është funksionale.",
+        "claim_type": "professional_inference",
+        "evidence_ids": [
+            "technical_works:0",
+            "materials_and_tests:0",
+            "declarations_and_conclusions:0",
+        ],
+        "confidence": 0.7,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert result["status"] == "needs_correction"
+    assert "CLAIM-UNSIGNED-AUTHORIZATION" in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
 def test_verifier_rejects_cross_snapshot_evidence() -> None:
     state = _grounded_state()
     response = _draft_with_paragraphs()
@@ -205,9 +303,15 @@ def test_corrector_runs_once_and_replaces_draft(monkeypatch) -> None:
     }
     corrected = _draft_with_paragraphs()
     corrected["executive_summary"]["text"] = "Përmbledhje e korrigjuar për Godinë banimi."
+    captured_inputs = []
+
+    def fake_correction_request(correction_input, *, ai_settings):
+        captured_inputs.append(correction_input)
+        return corrected
+
     monkeypatch.setattr(
         "app.agents.nodes.kolaudim_corrector.request_kolaudim_correction",
-        lambda correction_input, *, ai_settings: corrected,
+        fake_correction_request,
     )
 
     assert route_after_claim_verification(state) == "correct"
@@ -217,6 +321,12 @@ def test_corrector_runs_once_and_replaces_draft(monkeypatch) -> None:
     assert result["kolaudim_correction"]["attempt_count"] == 1
     assert result["kolaudim_draft"]["executive_summary"].startswith("Përmbledhje")
     assert route_after_claim_verification(result) == "finalize"
+    assert "declarations_and_conclusions:0" in captured_inputs[0][
+        "supplemental_evidence_ids"
+    ]
+    assert "declarations_and_conclusions:0" in captured_inputs[0][
+        "allowed_evidence_ids"
+    ]
 
 
 def test_publication_gate_rejects_unverified_revision() -> None:

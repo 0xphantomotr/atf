@@ -488,6 +488,17 @@ def _analyse_document(
         _extract_property_values(text, document, candidates, style_reference)
         _extract_timeline_values(lines, document, candidates, style_reference)
 
+    if is_parsed_status(parse_status) and text:
+        if not extract_excerpt_facts:
+            _extract_role_details(lines, document, candidates, style_reference)
+        _extract_contract_role_values(
+            text,
+            lines,
+            document,
+            candidates,
+            style_reference,
+        )
+
     extracted_fields = sorted(
         field
         for field, items in candidates.items()
@@ -615,6 +626,159 @@ def _extract_role_details(
                         style_reference,
                     )
             break
+
+
+def _extract_contract_role_values(
+    text: str,
+    lines: list[str],
+    document: dict[str, Any],
+    candidates: dict[str, list[dict[str, Any]]],
+    style_reference: bool,
+) -> None:
+    role = _contract_role_from_document(document, text)
+    if not role:
+        return
+
+    filename = str(document.get("original_filename") or "")
+    party = _party_from_filename(filename) or _party_from_contract_lines(lines, role)
+    if party:
+        _add_candidate(
+            candidates,
+            role,
+            party,
+            document,
+            filename,
+            0.91,
+            style_reference,
+        )
+
+    reference = _contract_reference_from_text(text)
+    if reference:
+        _add_candidate(
+            candidates,
+            f"{role}_contract_reference",
+            reference,
+            document,
+            reference,
+            0.92,
+            style_reference,
+        )
+
+
+def _contract_role_from_document(document: dict[str, Any], text: str) -> str | None:
+    filename = _normalize(str(document.get("original_filename") or ""))
+    document_type = str(document.get("document_type") or "")
+    if "kolaudator" in filename:
+        return "kolaudator"
+    if "mbikeqyres" in filename or "mbikqyres" in filename or "supervizor" in filename:
+        return "supervisor"
+    if "sipermarres" in filename or "sipemarr" in filename or "zbatues" in filename:
+        return "contractor"
+    if document_type == "supervisor_contract":
+        return "supervisor"
+    if document_type not in {"contract_and_related_acts", "supervisor_contract", "unknown"}:
+        return None
+
+    first_page = _normalize(text[:2_500])
+    if "kontrat" not in first_page:
+        return None
+    if "kolaudator" in first_page:
+        return "kolaudator"
+    if "mbikeqyres" in first_page or "mbikqyres" in first_page or "supervizor" in first_page:
+        return "supervisor"
+    if "sipermarres" in first_page or "sipemarr" in first_page or "zbatues" in first_page:
+        return "contractor"
+    return None
+
+
+def _party_from_filename(filename: str) -> str | None:
+    stem = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", filename.replace("_", " ")).strip()
+    stem = re.sub(r"^\s*\d+(?:\.\d+)*\s*", "", stem)
+    match = re.search(
+        r"\bme\s+((?:z\.?|znj\.?)?\s*[A-ZÇË][A-Za-zÇËËçë.'\s-]{2,80})",
+        stem,
+        re.I,
+    )
+    if not match:
+        return None
+    return _clean_party_name(match.group(1))
+
+
+def _party_from_contract_lines(lines: list[str], role: str) -> str | None:
+    terms = {
+        "contractor": r"(?:sip[eë]rmarr[eë]s(?:i|in)?|zbatues(?:i|in)?)",
+        "supervisor": r"(?:mbik[eë]qyr[eë]s(?:i|in)?|supervizor(?:i|in)?)",
+        "kolaudator": r"(?:kolaudator(?:i|in)?)",
+    }.get(role)
+    if not terms:
+        return None
+    pattern = re.compile(
+        terms
+        + r"(?:\s+i\s+punimeve)?\s*(?:[:\-]|me\s+)?\s*"
+        + r"((?:z\.?|znj\.?|ing\.?|ark\.?)?\s*"
+        + r"[A-ZÇË][^,;\n]{2,90}(?:sh\.?\s*p\.?\s*k\.?)?)",
+        re.I,
+    )
+    for line in lines[:80]:
+        match = pattern.search(line)
+        if match:
+            party = _clean_party_name(match.group(1))
+            if party:
+                return party
+    return None
+
+
+def _contract_reference_from_text(text: str) -> str | None:
+    compact = " ".join(text.split())[:5_000]
+    match = re.search(
+        r"(?:nr\.?\s*)?(?:rep\.?|repertori)\s*[:.]?\s*(\d{1,8})"
+        r".{0,80}?(?:nr\.?\s*)?(?:kol\.?|koleksioni)\s*[:.]?\s*(\d{1,8})"
+        r".{0,80}?(?:dat[eë]|date)\s*[:.]?\s*"
+        r"([0-3]?\d[./-][01]?\d[./-](?:19|20)?\d{2})",
+        compact,
+        re.I,
+    )
+    if match:
+        rep, kol, date = match.groups()
+        dates = _extract_dates(date)
+        normalized_date = dates[0] if dates else date
+        return f"Nr. Rep. {rep}, Nr. Kol. {kol}, datë {normalized_date}"
+
+    match = re.search(
+        r"(?:nr\.?\s*)?(\d{1,8})\s*(?:rep\.?|repertori)"
+        r".{0,80}?(?:nr\.?\s*)?(\d{1,8})\s*(?:kol\.?|koleksioni)"
+        r".{0,80}?(?:dat[eë]|date)\s*[:.]?\s*"
+        r"([0-3]?\d[./-][01]?\d[./-](?:19|20)?\d{2})",
+        compact,
+        re.I,
+    )
+    if match:
+        rep, kol, date = match.groups()
+        dates = _extract_dates(date)
+        normalized_date = dates[0] if dates else date
+        return f"Nr. Rep. {rep}, Nr. Kol. {kol}, datë {normalized_date}"
+
+    match = re.search(
+        r"(?:nr\.?\s*)?(\d{1,8})\s*(?:rep\.?|repertori)"
+        r".{0,80}?(?:nr\.?\s*)?(\d{1,8})\s*(?:kol\.?|koleksioni)",
+        compact,
+        re.I,
+    )
+    if match:
+        rep, kol = match.groups()
+        return f"Nr. Rep. {rep}, Nr. Kol. {kol}"
+    return None
+
+
+def _clean_party_name(value: str) -> str | None:
+    value = " ".join(value.replace("_", " ").split())
+    value = re.sub(r"\b(?:docx?|pdf|kontrat[ëe]?)\b.*$", "", value, flags=re.I)
+    value = re.sub(r"^(?:me\s+)", "", value, flags=re.I).strip(" ,.;:-")
+    value = re.sub(r"^(z|znj|ing|ark)\.\s*", lambda m: f"{m.group(1)}. ", value, flags=re.I)
+    value = value.strip('"“” ,.;:-')
+    if len(value) < 3 or PLACEHOLDER_PATTERN.search(value):
+        return None
+    return value[:120]
 
 
 def _extract_permit_values(
@@ -1315,6 +1479,7 @@ def _rank_group(field: str, items: list[dict[str, Any]]) -> dict[str, Any]:
                 "source_document": item.get("source_document"),
                 "snippet": str(item.get("evidence") or "")[:260],
                 "analysis_run_id": item.get("analysis_run_id"),
+                "source_file_version_id": item.get("source_file_version_id"),
                 "source_chunk_id": item.get("source_chunk_id"),
                 "source_chunk_index": item.get("source_chunk_index"),
             }
@@ -1362,6 +1527,7 @@ def _add_candidate(
             or 0.55,
             "extraction_confidence": extraction_confidence,
             "evidence": " ".join(evidence.split())[:300],
+            "source_file_version_id": document.get("version_id"),
             "style_reference": style_reference,
         }
     )
