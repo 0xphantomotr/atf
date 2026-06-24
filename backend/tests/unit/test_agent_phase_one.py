@@ -421,6 +421,129 @@ def test_professional_dossier_uses_verified_persisted_analysis_claims() -> None:
     assert dossier["summary"]["persisted_claim_candidate_count"] == 1
 
 
+def test_professional_dossier_scopes_document_and_stage_facts_out_of_canonical() -> None:
+    first_id = uuid.uuid4()
+    second_id = uuid.uuid4()
+    state = {
+        "documents": [
+            {
+                "version_id": str(first_id),
+                "original_filename": "themele.docx",
+                "parse_status": "parsed",
+                "document_type": "hidden_works_minutes",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Procesverbal punime të maskuara.",
+            },
+            {
+                "version_id": str(second_id),
+                "original_filename": "soleta.docx",
+                "parse_status": "parsed",
+                "document_type": "hidden_works_minutes",
+                "classification_confidence": 0.98,
+                "text_excerpt": "Procesverbal punime të maskuara.",
+            },
+        ],
+        "document_analyses": [
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "file_version_id": str(first_id),
+                "claims": [
+                    {
+                        "field_name": "date_of_document",
+                        "original_value": "26.04.2023",
+                        "confidence": 0.96,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 1,
+                                "supporting_excerpt": "Datë 26.04.2023",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    },
+                    {
+                        "field_name": "element_name",
+                        "original_value": "Themel Plint",
+                        "confidence": 0.95,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 2,
+                                "supporting_excerpt": "Elementi: Themel Plint",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    },
+                    {
+                        "field_name": "kontrata_sipermarrjes",
+                        "original_value": "Nr. 2026 Rep., Nr. 1251 Kol.",
+                        "confidence": 0.9,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 3,
+                                "supporting_excerpt": "Kontrata e sipërmarrjes...",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    },
+                ],
+            },
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "file_version_id": str(second_id),
+                "claims": [
+                    {
+                        "field_name": "date_of_document",
+                        "original_value": "07.03.2024",
+                        "confidence": 0.96,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 1,
+                                "supporting_excerpt": "Datë 07.03.2024",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    },
+                    {
+                        "field_name": "element_name",
+                        "original_value": "Soleta B/A",
+                        "confidence": 0.95,
+                        "evidence": [
+                            {
+                                "chunk_id": str(uuid.uuid4()),
+                                "chunk_index": 2,
+                                "supporting_excerpt": "Elementi: Soleta B/A",
+                                "excerpt_verified": True,
+                            }
+                        ],
+                    },
+                ],
+            },
+        ],
+        "extracted_facts": {},
+        "agent_trace": [],
+    }
+
+    dossier = build_professional_dossier(state)["professional_dossier"]
+
+    assert "document_date" not in dossier["canonical_facts"]
+    assert "work_element" not in dossier["canonical_facts"]
+    assert "contractor_contract_reference" not in dossier["canonical_facts"]
+    assert dossier["conflicts"] == []
+    assert {
+        item["value"] for item in dossier["scoped_facts"]["document_metadata"]
+    } == {"26.04.2023", "07.03.2024"}
+    assert {item["value"] for item in dossier["scoped_facts"]["work_stages"]} == {
+        "Themel Plint",
+        "Soleta B/A",
+    }
+    assert dossier["scoped_facts"]["contract_references"][0]["value"] == (
+        "Nr. 2026 Rep., Nr. 1251 Kol"
+    )
+
+
 def test_professional_dossier_rejects_narrative_as_designer_identity() -> None:
     state = {
         "agent_trace": [],

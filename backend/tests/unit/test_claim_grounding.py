@@ -236,3 +236,128 @@ def test_publication_gate_rejects_unverified_revision() -> None:
 
     with pytest.raises(ClaimVerificationError, match="Nuk u prodhua"):
         enforce_publishable_kolaudim(state)
+
+
+def test_conflict_verifier_explains_selected_and_used_sources() -> None:
+    state = _grounded_state()
+    state["professional_dossier"]["canonical_facts"]["contractor"] = {
+        "value": "EB-2000 sh.p.k.",
+        "source_documents": ["Deklaratë sipërmarrësi.docx"],
+    }
+    state["professional_dossier"]["conflicts"] = [
+        {
+            "field": "contractor",
+            "selected_value": "EB-2000 sh.p.k.",
+            "selected_score": 1.8,
+            "alternatives": [
+                {
+                    "value": "KËRPI sh.p.k.",
+                    "score": 0.9,
+                    "source_documents": ["Kontratë mbikëqyrësi.docx"],
+                }
+            ],
+        }
+    ]
+    response = _draft_with_paragraphs()
+    response["executive_summary"]["text"] = (
+        "Akti lidhet me objektin Godinë banimi dhe sipërmarrës KËRPI sh.p.k."
+    )
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    verification = verify_kolaudim_claims(state)["claim_verification"]
+
+    conflict_issue = next(
+        issue
+        for issue in verification["issues"]
+        if issue["code"] == "PUBLIC-CONFLICT-ALTERNATIVE-USED"
+    )
+    assert conflict_issue["severity"] == "major"
+    assert conflict_issue["field"] == "contractor"
+    assert conflict_issue["selected_value"] == "EB-2000 sh.p.k."
+    assert conflict_issue["alternative_value"] == "KËRPI sh.p.k."
+    assert conflict_issue["selected_source_documents"] == ["Deklaratë sipërmarrësi.docx"]
+    assert conflict_issue["alternative_source_documents"] == [
+        "Kontratë mbikëqyrësi.docx"
+    ]
+    instruction = next(
+        item
+        for item in verification["correction_instructions"]
+        if item["code"] == "PUBLIC-CONFLICT-ALTERNATIVE-USED"
+    )
+    assert instruction["selected_value"] == "EB-2000 sh.p.k."
+    assert instruction["alternative_value"] == "KËRPI sh.p.k."
+
+
+def test_object_name_alternative_is_diagnostic_not_publication_blocker() -> None:
+    state = _grounded_state()
+    state["professional_dossier"]["canonical_facts"]["object_name"].update(
+        {
+            "value": "Shtesë 1 kat në banesën ekzistuese 1 kat",
+            "source_documents": ["Njoftim Fillim Punimesh.docx"],
+        }
+    )
+    state["professional_dossier"]["conflicts"] = [
+        {
+            "field": "object_name",
+            "selected_value": "Shtesë 1 kat në banesën ekzistuese 1 kat",
+            "selected_score": 1.8,
+            "alternatives": [
+                {
+                    "value": "Ndërtesë banimi 1 kat me podrum",
+                    "score": 0.9,
+                    "source_documents": ["Njoftim Përfundim Punimesh.docx"],
+                }
+            ],
+        }
+    ]
+    response = _draft_with_paragraphs()
+    response["executive_summary"]["text"] = (
+        "Akti lidhet me objektin Ndërtesë banimi 1 kat me podrum."
+    )
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    verification = verify_kolaudim_claims(state)["claim_verification"]
+
+    conflict_issue = next(
+        issue
+        for issue in verification["issues"]
+        if issue["code"] == "PUBLIC-CONFLICT-ALTERNATIVE-USED"
+    )
+    assert conflict_issue["severity"] == "minor"
+    assert verification["summary"]["publishable"] is True
+
+
+def test_publication_gate_includes_conflict_sources_in_error() -> None:
+    state = _grounded_state()
+    state["kolaudim_draft"] = {"status": "drafted"}
+    state["claim_verification"] = {
+        "status": "needs_correction",
+        "issues": [
+            {
+                "code": "PUBLIC-CONFLICT-ALTERNATIVE-USED",
+                "severity": "major",
+                "field": "contractor",
+                "selected_value": "EB-2000 sh.p.k.",
+                "alternative_value": "KËRPI sh.p.k.",
+                "selected_source_documents": ["Deklaratë sipërmarrësi.docx"],
+                "alternative_source_documents": ["Kontratë mbikëqyrësi.docx"],
+            }
+        ],
+        "summary": {"publishable": False},
+    }
+
+    with pytest.raises(ClaimVerificationError) as exc_info:
+        enforce_publishable_kolaudim(state)
+
+    message = str(exc_info.value)
+    assert "field=contractor" in message
+    assert "canonical=EB-2000 sh.p.k." in message
+    assert "used=KËRPI sh.p.k." in message
+    assert "Deklaratë sipërmarrësi.docx" in message
+    assert "Kontratë mbikëqyrësi.docx" in message

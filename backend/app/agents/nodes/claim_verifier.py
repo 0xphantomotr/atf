@@ -33,6 +33,22 @@ PUBLIC_TABLE_FACTS = CORE_PUBLIC_FACTS + (
     "supervisor_license",
     "kolaudator_license",
 )
+PUBLIC_BLOCKING_CONFLICT_FIELDS = {
+    "location",
+    "investor",
+    "owner",
+    "contractor",
+    "supervisor",
+    "kolaudator",
+    "construction_permit_number",
+    "construction_permit_protocol",
+    "construction_permit_date",
+    "development_permit_number",
+    "development_permit_protocol",
+    "development_permit_date",
+    "property_number",
+    "cadastral_zone",
+}
 CLAIM_TYPES = {"documented_fact", "professional_inference", "qualification"}
 DIRECT_EVIDENCE_KINDS = {
     "register_entry",
@@ -173,11 +189,7 @@ def verify_kolaudim_claims(state: AuditGraphState) -> AuditGraphState:
         "status": "verified" if not major_count else "needs_correction",
         "issues": issues,
         "correction_instructions": [
-            {
-                "code": issue["code"],
-                "claim_id": issue.get("claim_id"),
-                "instruction": issue["message"],
-            }
+            _correction_instruction(issue)
             for issue in issues
             if issue["severity"] == "major"
         ],
@@ -516,10 +528,20 @@ def _verify_conflicting_alternatives(
 ) -> None:
     if not isinstance(dossier, dict):
         return
+    canonical = dossier.get("canonical_facts", {})
+    if not isinstance(canonical, dict):
+        canonical = {}
     for conflict in dossier.get("conflicts", []):
         if not isinstance(conflict, dict):
             continue
+        field = str(conflict.get("field") or "").strip()
         selected = str(conflict.get("selected_value") or "")
+        selected_fact = canonical.get(field)
+        selected_sources = (
+            _source_documents(selected_fact)
+            if isinstance(selected_fact, dict)
+            else []
+        )
         for alternative in conflict.get("alternatives", []):
             if not isinstance(alternative, dict):
                 continue
@@ -529,15 +551,52 @@ def _verify_conflicting_alternatives(
                 and _material_value_present(alternative_value, public_text)
                 and not _material_value_present(selected, public_text)
             ):
+                severity = (
+                    "major" if field in PUBLIC_BLOCKING_CONFLICT_FIELDS else "minor"
+                )
                 issues.append(
                     {
                         "code": "PUBLIC-CONFLICT-ALTERNATIVE-USED",
-                        "severity": "major",
-                        "field": conflict.get("field"),
-                        "message": "Drafti përdor alternativën dhe jo faktin kanonik.",
+                        "severity": severity,
+                        "field": field,
+                        "selected_value": selected,
+                        "alternative_value": alternative_value,
+                        "selected_score": conflict.get("selected_score"),
+                        "alternative_score": alternative.get("score"),
+                        "selected_source_documents": selected_sources,
+                        "alternative_source_documents": _source_documents(alternative),
+                        "message": (
+                            "Drafti përdor alternativën dhe jo faktin kanonik "
+                            f"për fushën '{field}'."
+                        ),
                     }
                 )
                 break
+
+
+def _correction_instruction(issue: dict[str, Any]) -> dict[str, Any]:
+    instruction = {
+        "code": issue["code"],
+        "claim_id": issue.get("claim_id"),
+        "instruction": issue["message"],
+    }
+    for key in (
+        "field",
+        "selected_value",
+        "alternative_value",
+        "selected_source_documents",
+        "alternative_source_documents",
+    ):
+        if key in issue:
+            instruction[key] = issue[key]
+    return instruction
+
+
+def _source_documents(item: dict[str, Any]) -> list[str]:
+    sources = item.get("source_documents")
+    if not isinstance(sources, list):
+        return []
+    return [str(source) for source in sources if str(source).strip()][:5]
 
 
 def _issue(

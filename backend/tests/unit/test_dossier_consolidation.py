@@ -260,3 +260,8 @@ def test_canonical_field_aliases_are_project_agnostic() -> None:
     assert canonical_field_name("building permit number") == "construction_permit_number"
     assert canonical_field_name("Construction Company") == "contractor"
     assert canonical_field_name("Total Construction Area") == "total_construction_area"
+    assert canonical_field_name("emri_objektit") == "object_name"
+    assert canonical_field_name("sipermarresi") == "contractor"
+    assert canonical_field_name("kontrata_sipemarrjes") == "contractor_contract_reference"
+    assert canonical_field_name("date_of_document") == "document_date"
+    assert canonical_field_name("element_name") == "work_element"

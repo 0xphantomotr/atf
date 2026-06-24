@@ -106,17 +106,60 @@ def enforce_publishable_kolaudim(state: AuditGraphState) -> AuditGraphState:
     if not isinstance(verification, dict) or not verification.get("summary", {}).get(
         "publishable"
     ):
-        issue_codes = [
-            str(issue.get("code"))
+        major_issues = [
+            issue
             for issue in verification.get("issues", [])
             if isinstance(issue, dict) and issue.get("severity") == "major"
         ][:8]
-        detail = ", ".join(issue_codes) or "verification_failed"
+        detail = _publish_block_detail(major_issues)
         raise ClaimVerificationError(
             "Drafti i Akt-Kolaudimit mbeti i pambështetur pas një korrigjimi: "
             f"{detail}. Nuk u prodhua dokument publik."
         )
     return state
+
+
+def _publish_block_detail(issues: list[dict[str, Any]]) -> str:
+    if not issues:
+        return "verification_failed"
+    details = [_issue_detail(issue) for issue in issues]
+    return " | ".join(detail for detail in details if detail) or "verification_failed"
+
+
+def _issue_detail(issue: dict[str, Any]) -> str:
+    code = str(issue.get("code") or "verification_failed")
+    if code != "PUBLIC-CONFLICT-ALTERNATIVE-USED":
+        return code
+
+    field = str(issue.get("field") or "unknown_field")
+    selected = _clip(str(issue.get("selected_value") or ""))
+    alternative = _clip(str(issue.get("alternative_value") or ""))
+    selected_sources = _source_list(issue.get("selected_source_documents"))
+    alternative_sources = _source_list(issue.get("alternative_source_documents"))
+    parts = [
+        f"{code}[field={field}",
+        f"canonical={selected or '-'}",
+        f"used={alternative or '-'}",
+    ]
+    if selected_sources:
+        parts.append(f"canonical_sources={selected_sources}")
+    if alternative_sources:
+        parts.append(f"used_sources={alternative_sources}")
+    return ", ".join(parts) + "]"
+
+
+def _clip(value: str, limit: int = 90) -> str:
+    value = " ".join(value.split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def _source_list(value: object) -> str:
+    if not isinstance(value, list):
+        return ""
+    names = [str(item) for item in value if str(item).strip()][:3]
+    return "; ".join(_clip(name, 70) for name in names)
 
 
 def _build_correction_input(

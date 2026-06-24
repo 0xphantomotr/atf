@@ -250,6 +250,80 @@ CORE_FIELDS = (
     "completion_date",
 )
 PROJECT_ANCHOR_FIELDS = ("object_name", "location", "investor", "contractor")
+PROJECT_CANONICAL_FIELDS = frozenset(
+    {
+        *CORE_FIELDS,
+        "owner",
+        "designer",
+        "contractor_nipt",
+        "investor_nipt",
+        "supervisor_license",
+        "kolaudator_license",
+        "designer_license",
+        "development_permit_number",
+        "development_permit_protocol",
+        "development_permit_date",
+        "construction_permit_protocol",
+        "property_number",
+        "cadastral_zone",
+        "site_area",
+        "footprint_area",
+        "total_construction_area",
+        "basement_area",
+        "maximum_height",
+        "floors_above_ground",
+        "floors_below_ground",
+        "soil_bearing_capacity",
+        "seismic_intensity",
+        "planned_value",
+        "final_value",
+    }
+)
+PUBLIC_BLOCKING_CONFLICT_FIELDS = frozenset(
+    {
+        "location",
+        "investor",
+        "owner",
+        "contractor",
+        "supervisor",
+        "kolaudator",
+        "construction_permit_number",
+        "construction_permit_protocol",
+        "construction_permit_date",
+        "development_permit_number",
+        "development_permit_protocol",
+        "development_permit_date",
+        "property_number",
+        "cadastral_zone",
+    }
+)
+DOCUMENT_METADATA_FIELDS = frozenset(
+    {
+        "document_date",
+        "document_number",
+        "protocol_number",
+        "notary_repertory_number",
+        "notary_collection_number",
+    }
+)
+WORK_STAGE_FIELDS = frozenset(
+    {
+        "work_element",
+        "phase_name",
+        "stage_name",
+        "construction_phase",
+        "hidden_work_element",
+    }
+)
+CONTRACT_REFERENCE_FIELDS = frozenset(
+    {
+        "contract_reference",
+        "contractor_contract_reference",
+        "supervisor_contract_reference",
+        "kolaudator_contract_reference",
+    }
+)
+
 
 def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
     state.setdefault("agent_trace", []).append("professional_dossier")
@@ -293,13 +367,24 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
             candidates,
             document_records,
         )
-    initial_facts, _ = _resolve_canonical_facts(candidates)
+    initial_facts, _ = _resolve_canonical_facts(
+        candidates,
+        canonical_fields=set(PROJECT_ANCHOR_FIELDS),
+    )
     project_relations = _assign_project_relations(
         document_records,
         candidates,
         initial_facts,
     )
-    canonical_facts, conflicts = _resolve_canonical_facts(candidates)
+    canonical_facts, conflicts = _resolve_canonical_facts(
+        candidates,
+        canonical_fields=PROJECT_CANONICAL_FIELDS,
+        conflict_fields=PUBLIC_BLOCKING_CONFLICT_FIELDS,
+    )
+    scoped_facts = _build_scoped_facts(
+        candidates,
+        canonical_fields=PROJECT_CANONICAL_FIELDS,
+    )
     consolidation = consolidate_project_registers(
         analyses=analyses,
         documents=state.get("documents", []),
@@ -336,6 +421,7 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
         "evidence_coverage": consolidation["evidence_coverage"],
         "integrity_issues": consolidation["integrity_issues"],
         "conflicts": conflicts,
+        "scoped_facts": scoped_facts,
         "chronology": chronology,
         "technical_observations": technical_observations[:80],
         "document_records": document_records,
@@ -362,6 +448,7 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
             "persisted_analysis_count": len(state.get("document_analyses", [])),
             "persisted_claim_candidate_count": persisted_claim_count,
             "conflict_count": len(conflicts),
+            "scoped_fact_count": sum(len(items) for items in scoped_facts.values()),
             "chronology_event_count": len(chronology),
             "missing_core_field_count": len(missing_core_fields),
             "register_entry_count": sum(len(items) for items in registers.values()),
@@ -988,11 +1075,16 @@ def _add_persisted_analysis_candidates(
 
 def _resolve_canonical_facts(
     candidates: dict[str, list[dict[str, Any]]],
+    *,
+    canonical_fields: frozenset[str] | set[str] | None = None,
+    conflict_fields: frozenset[str] | set[str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     canonical: dict[str, dict[str, Any]] = {}
     conflicts: list[dict[str, Any]] = []
 
     for field, field_candidates in sorted(candidates.items()):
+        if canonical_fields is not None and field not in canonical_fields:
+            continue
         usable = [
             item
             for item in field_candidates
@@ -1033,7 +1125,7 @@ def _resolve_canonical_facts(
             "corroborating_source_count": winner["source_count"],
             "alternatives": alternatives,
         }
-        if alternatives:
+        if alternatives and (conflict_fields is None or field in conflict_fields):
             conflicts.append(
                 {
                     "field": field,
@@ -1045,6 +1137,65 @@ def _resolve_canonical_facts(
             )
 
     return canonical, conflicts
+
+
+def _build_scoped_facts(
+    candidates: dict[str, list[dict[str, Any]]],
+    *,
+    canonical_fields: frozenset[str] | set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    scoped: dict[str, list[dict[str, Any]]] = {
+        "document_metadata": [],
+        "work_stages": [],
+        "contract_references": [],
+        "supporting_facts": [],
+    }
+    seen: set[tuple[str, str, str, str]] = set()
+    for field, field_candidates in sorted(candidates.items()):
+        if field in canonical_fields:
+            continue
+        scope = _fact_scope(field)
+        for candidate in field_candidates:
+            if candidate.get("style_reference"):
+                continue
+            if candidate.get("project_relation") == "foreign_project_reference":
+                continue
+            value = str(candidate.get("value") or "").strip()
+            source_document = str(candidate.get("source_document") or "").strip()
+            if not value or not source_document:
+                continue
+            key = (scope, field, _normalize_fact_value(field, value), source_document)
+            if key in seen:
+                continue
+            seen.add(key)
+            scoped[scope].append(
+                {
+                    "field_name": field,
+                    "value": value,
+                    "source_document": source_document,
+                    "document_type": candidate.get("document_type") or "unknown",
+                    "confidence": round(
+                        float(candidate.get("extraction_confidence") or 0.0),
+                        3,
+                    ),
+                    "evidence": str(candidate.get("evidence") or "")[:260],
+                }
+            )
+    return {
+        scope: items[:80 if scope == "supporting_facts" else 60]
+        for scope, items in scoped.items()
+        if items
+    }
+
+
+def _fact_scope(field: str) -> str:
+    if field in DOCUMENT_METADATA_FIELDS or field.endswith("_document_date"):
+        return "document_metadata"
+    if field in WORK_STAGE_FIELDS or "element" in field or "phase" in field:
+        return "work_stages"
+    if field in CONTRACT_REFERENCE_FIELDS or "contract_reference" in field:
+        return "contract_references"
+    return "supporting_facts"
 
 
 def _assign_project_relations(

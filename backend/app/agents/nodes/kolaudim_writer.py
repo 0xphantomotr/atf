@@ -515,6 +515,7 @@ def _compact_professional_dossier(
     return {
         "canonical_facts": compact_facts,
         "registers": _compact_registers(dossier.get("registers")),
+        "scoped_facts": _compact_scoped_facts(dossier.get("scoped_facts")),
         "economic_summary": dict(dossier.get("economic_summary", {}))
         if isinstance(dossier.get("economic_summary"), dict)
         else {},
@@ -566,6 +567,27 @@ def _compact_professional_dossier(
         if isinstance(dossier.get("summary"), dict)
         else {},
     }
+
+
+def _compact_scoped_facts(value: object) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}
+    compacted: dict[str, list[dict[str, Any]]] = {}
+    for scope, items in value.items():
+        if not isinstance(items, list):
+            continue
+        compacted[str(scope)] = [
+            {
+                "field_name": item.get("field_name"),
+                "value": _truncate(item.get("value"), 220),
+                "source_document": item.get("source_document"),
+                "document_type": item.get("document_type"),
+                "evidence": _truncate(item.get("evidence"), 220),
+            }
+            for item in items[:40]
+            if isinstance(item, dict)
+        ]
+    return {key: items for key, items in compacted.items() if items}
 
 
 def _compact_specialist_reviews(value: object) -> dict[str, Any]:

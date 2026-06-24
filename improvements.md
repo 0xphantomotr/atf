@@ -1,6 +1,6 @@
 # Akt Kolaudimi Improvement Roadmap
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 ## Objective
 
@@ -37,6 +37,11 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
 - [x] Stakeholder, permit, chronology, technical, quality and economic registers.
 - [x] Evidence ranking by authority, confidence and corroboration.
 - [x] Conflict retention instead of silently selecting every disputed value.
+- [x] Project-wide canonical facts separated from document metadata, work-stage facts and
+  contract-reference facts.
+- [x] Albanian aliases such as `emri_objektit`, `sipermarresi`,
+  `kontrata_sipermarrjes`, `date_of_document` and `element_name` normalized before
+  dossier consolidation.
 - [x] Exclusion of foreign-project and unverified style-reference evidence.
 - [x] Dynamic input fitting based on the selected model's context budget.
 
@@ -48,6 +53,10 @@ clean and professional; provenance, uncertainty and agent diagnostics remain int
 - [x] Clean Akt Kolaudimi PDF without checklist or internal audit sections.
 - [x] Basic deterministic checks for placeholders, internal terminology, canonical facts
   and conflicting alternatives.
+- [x] Conflict diagnostics show the disputed field, canonical value, used alternative and
+  source documents when publication is blocked.
+- [x] Publish gate blocks material party/permit conflicts while treating object-name
+  wording variants as diagnostic unless stronger evidence marks a foreign project.
 - [x] Failed specialist calls preserve deterministic evidence packets.
 
 ### Verification baseline
@@ -76,6 +85,8 @@ an unsupported conclusion more convincingly.
 - [x] Detect claims that imply a physical inspection when the folder only proves document
   review.
 - [x] Produce targeted correction instructions for unsupported or contradictory claims.
+- [x] Include selected and alternative source documents in conflict correction
+  instructions.
 - [x] Run at most one correction pass, then verify the revised draft again.
 - [x] Render only the verified revision; keep the evidence ledger internal.
 - [x] Never return an older successful PDF when the latest generation fails.
