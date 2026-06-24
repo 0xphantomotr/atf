@@ -2,7 +2,12 @@ import re
 from typing import Any
 
 from app.agents.claim_grounding import register_evidence_id
-from app.agents.dossier_consolidation import STAKEHOLDER_FIELDS, canonical_field_name
+from app.agents.dossier_consolidation import (
+    PERMIT_FIELDS,
+    STAKEHOLDER_FIELDS,
+    canonical_field_name,
+    permit_value_is_bare_reference,
+)
 
 REGISTER_PRIORITY = {
     "permits_property_licenses": 1,
@@ -87,6 +92,9 @@ NON_BLOCKING_FIELD_TERMS = (
     "administrator",
     "authorized_person",
 )
+NON_BLOCKING_EXACT_FIELDS = {
+    "contract_reference",
+}
 
 
 def select_required_public_details(
@@ -116,6 +124,18 @@ def select_required_public_details(
                 continue
             if _is_non_blocking_role_detail(field):
                 continue
+            if field in NON_BLOCKING_EXACT_FIELDS:
+                continue
+            source_documents = _string_list(
+                entry.get("source_documents"),
+                limit=4,
+            )
+            if (
+                field in PERMIT_FIELDS
+                and permit_value_is_bare_reference(value)
+                and not _bare_permit_detail_is_trusted(entry, source_documents)
+            ):
+                continue
             group, priority = _field_group_priority(register, field)
             if not group:
                 continue
@@ -129,10 +149,7 @@ def select_required_public_details(
                     "priority": priority,
                     "must_include": priority <= 2,
                     "confidence_level": entry.get("confidence_level"),
-                    "source_documents": _string_list(
-                        entry.get("source_documents"),
-                        limit=4,
-                    ),
+                    "source_documents": source_documents,
                 }
             )
 
@@ -187,6 +204,21 @@ def _field_group_priority(register: str, field: str) -> tuple[str, int]:
 
 def _is_non_blocking_role_detail(field: str) -> bool:
     return any(term in field for term in NON_BLOCKING_FIELD_TERMS)
+
+
+def _bare_permit_detail_is_trusted(
+    entry: dict[str, Any],
+    source_documents: list[str],
+) -> bool:
+    if str(entry.get("confidence_level") or "").lower() != "high":
+        return False
+    normalized_sources = _normalize_value(" ".join(source_documents))
+    if any(term in normalized_sources for term in ("proces", "verbal", "fillim")):
+        return False
+    return any(
+        term in normalized_sources
+        for term in ("leje", "permit", "constructionpermit", "developmentpermit")
+    )
 
 
 def _is_same_field_duplicate(

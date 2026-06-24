@@ -7,6 +7,7 @@ from app.agents.claim_grounding import (
     claim_source_references,
     register_evidence_id,
 )
+from app.agents.public_formatting import format_public_text
 from app.agents.public_details import select_required_public_details
 from app.agents.llm import (
     LLMReviewError,
@@ -61,6 +62,11 @@ DOCUMENT_TYPE_PRIORITY = {
     "maintenance_project": 9,
     "as_built_project": 9,
     "kolaudim_act": 30,
+}
+ROLE_CONTRACT_REFERENCE_FIELDS = {
+    "contractor_contract_reference": "contractor",
+    "supervisor_contract_reference": "supervisor",
+    "kolaudator_contract_reference": "kolaudator",
 }
 
 RELEVANT_LINE_TERMS = (
@@ -179,6 +185,14 @@ def _build_kolaudim_writer_input(
         "job": state.get("job", {}),
         "professional_dossier": dossier,
         "required_public_details": select_required_public_details(raw_dossier),
+        "contract_reference_policy": {
+            "role_specific_references": dossier.get("contract_reference_summary", {}),
+            "rules": [
+                "Për kontratën e sipërmarrjes përdor vetëm contractor_contract_reference.",
+                "Mos përdor supervisor_contract_reference ose kolaudator_contract_reference si kontratë sipërmarrjeje.",
+                "Mos përdor contract_reference gjenerik si fakt publik nëse nuk lidhet qartë me rolin.",
+            ],
+        },
         "conclusion_policy": {
             "levels": {
                 "proven": (
@@ -547,6 +561,7 @@ def _compact_professional_dossier(
         "canonical_facts": compact_facts,
         "registers": _compact_registers(dossier.get("registers")),
         "scoped_facts": _compact_scoped_facts(dossier.get("scoped_facts")),
+        "contract_reference_summary": _contract_reference_summary(dossier),
         "economic_summary": dict(dossier.get("economic_summary", {}))
         if isinstance(dossier.get("economic_summary"), dict)
         else {},
@@ -619,6 +634,65 @@ def _compact_scoped_facts(value: object) -> dict[str, list[dict[str, Any]]]:
             if isinstance(item, dict)
         ]
     return {key: items for key, items in compacted.items() if items}
+
+
+def _contract_reference_summary(dossier: dict[str, Any]) -> dict[str, Any]:
+    role_specific: dict[str, dict[str, Any]] = {}
+    generic: list[dict[str, Any]] = []
+    for source in _contract_reference_sources(dossier):
+        field = str(source.get("field_name") or "")
+        role = ROLE_CONTRACT_REFERENCE_FIELDS.get(field)
+        value = str(source.get("value") or "").strip()
+        if not value:
+            continue
+        item = {
+            "field_name": field,
+            "value": value,
+            "source_document": source.get("source_document"),
+            "source_documents": _string_list(source.get("source_documents"), limit=4),
+            "evidence_id": source.get("evidence_id"),
+        }
+        if role:
+            role_specific.setdefault(role, item)
+        elif field == "contract_reference":
+            generic.append(item)
+    return {
+        "role_specific": role_specific,
+        "generic_references": generic[:4],
+        "instruction": (
+            "Referencat gjenerike nuk përdoren si kontratë sipërmarrjeje. "
+            "Përdor vlerën sipas rolit përkatës kur ekziston."
+        ),
+    }
+
+
+def _contract_reference_sources(dossier: dict[str, Any]) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    registers = dossier.get("registers")
+    if isinstance(registers, dict):
+        for index, entry in enumerate(registers.get("contracts_and_economics", [])):
+            if not isinstance(entry, dict):
+                continue
+            field = str(entry.get("field_name") or "")
+            if field not in ROLE_CONTRACT_REFERENCE_FIELDS and field != "contract_reference":
+                continue
+            sources.append(
+                {
+                    "field_name": field,
+                    "value": entry.get("value"),
+                    "source_documents": entry.get("source_documents"),
+                    "evidence_id": register_evidence_id(
+                        "contracts_and_economics",
+                        index,
+                    ),
+                }
+            )
+    scoped = dossier.get("scoped_facts")
+    if isinstance(scoped, dict):
+        for item in scoped.get("contract_references", []):
+            if isinstance(item, dict):
+                sources.append(dict(item))
+    return sources
 
 
 def _compact_specialist_reviews(value: object) -> dict[str, Any]:
@@ -996,7 +1070,7 @@ def _normalize_kolaudim_draft(
         "claim_ledger": claim_ledger,
         "reservations": _string_list(draft.get("reservations")),
         "human_completion_items": _string_list(draft.get("human_completion_items")),
-        "signature_note": str(draft.get("signature_note") or "").strip(),
+        "signature_note": format_public_text(draft.get("signature_note")),
         "confidence": _safe_float(draft.get("confidence")),
     }
 
@@ -1010,7 +1084,7 @@ def _normalize_grounded_paragraph(
 ) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    statement = " ".join(str(value.get("text") or "").split())
+    statement = format_public_text(value.get("text"))
     if not statement:
         return None
     claim_type = str(value.get("claim_type") or "").strip()

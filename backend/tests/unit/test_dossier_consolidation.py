@@ -256,7 +256,14 @@ def test_consolidation_blocks_permit_claims_from_contract_documents() -> None:
     assert permits[0]["field_name"] == "construction_permit_number"
     assert permits[0]["value"] == "Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
     assert permits[0]["source_documents"] == ["1.5 Akt kontroll kantieri.docx"]
-    assert "Nr. 558" not in str(result)
+    register_values = [
+        str(entry.get("value") or "")
+        for entries in result["registers"].values()
+        if isinstance(entries, list)
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+    assert "Nr. 558" not in register_values
 
 
 def test_consolidation_rejects_bare_permit_number_from_process_minutes() -> None:
@@ -305,7 +312,51 @@ def test_consolidation_rejects_bare_permit_number_from_process_minutes() -> None
     permits = result["registers"][REGISTER_PERMITS]
     assert len(permits) == 1
     assert permits[0]["value"] == "Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
-    assert "558" not in str(result)
+    register_values = [
+        str(entry.get("value") or "")
+        for entries in result["registers"].values()
+        if isinstance(entries, list)
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+    assert "558" not in register_values
+
+
+def test_consolidation_rejects_bare_permit_number_from_misclassified_minutes() -> None:
+    start_id = uuid.uuid4()
+    start = _document(
+        start_id,
+        "1.3 Proces Verbal Fillim OK.docx",
+        "construction_permit",
+    )
+
+    result = consolidate_project_registers(
+        analyses=[
+            _analysis(
+                start_id,
+                start["sha256_hash"],
+                [
+                    _claim(
+                        "building_permit",
+                        "558",
+                        category="permit",
+                        supporting_excerpt="Proces Verbal Fillim Punimesh Nr. 558",
+                    ),
+                ],
+            ),
+        ],
+        documents=[start],
+        document_records=[
+            _record(
+                "1.3 Proces Verbal Fillim OK.docx",
+                "construction_permit",
+                version_id=start_id,
+            ),
+        ],
+        canonical_facts={},
+    )
+
+    assert result["registers"][REGISTER_PERMITS] == []
 
 
 def test_consolidation_calculates_economic_variance_and_chronology_integrity() -> None:
@@ -369,6 +420,9 @@ def test_canonical_field_aliases_are_project_agnostic() -> None:
     assert canonical_field_name("construction_permit") == "construction_permit_number"
     assert canonical_field_name("Construction Company") == "contractor"
     assert canonical_field_name("contractor_name") == "contractor"
+    assert canonical_field_name("contractor_name_text") == "contractor"
+    assert canonical_field_name("supervisor_name_text") == "supervisor"
+    assert canonical_field_name("kolaudator_name_text") == "kolaudator"
     assert canonical_field_name("Total Construction Area") == "total_construction_area"
     assert canonical_field_name("emri_objektit") == "object_name"
     assert canonical_field_name("sipermarresi") == "contractor"

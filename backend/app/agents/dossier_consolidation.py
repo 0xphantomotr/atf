@@ -56,6 +56,13 @@ PERMIT_CONTEXT_TERMS = (
     "construction permit",
     "development permit",
 )
+RICH_PERMIT_CONTEXT_TERMS = (
+    "prot",
+    "protokoll",
+    "date",
+    "dat",
+    "vendim",
+)
 
 FIELD_ALIASES = {
     "project_name": "object_name",
@@ -94,16 +101,31 @@ FIELD_ALIASES = {
     "technical_auditor": "kolaudator",
     "kolaudatori": "kolaudator",
     "investor_name": "investor",
+    "investor_name_text": "investor",
+    "investor_text": "investor",
     "emri_investitorit": "investor",
     "contractor_name": "contractor",
+    "contractor_name_text": "contractor",
+    "contractor_text": "contractor",
     "emri_sipermarresit": "contractor",
+    "emri_sipermarresit_text": "contractor",
     "supervisor_name": "supervisor",
+    "supervisor_name_text": "supervisor",
+    "supervisor_text": "supervisor",
     "emri_mbikqyresit": "supervisor",
     "emri_mbikeqyresit": "supervisor",
+    "emri_mbikqyresit_text": "supervisor",
+    "emri_mbikeqyresit_text": "supervisor",
     "kolaudator_name": "kolaudator",
+    "kolaudator_name_text": "kolaudator",
+    "kolaudator_text": "kolaudator",
     "emri_kolaudatorit": "kolaudator",
+    "emri_kolaudatorit_text": "kolaudator",
     "designer_name": "designer",
+    "designer_name_text": "designer",
+    "designer_text": "designer",
     "emri_projektuesit": "designer",
+    "emri_projektuesit_text": "designer",
     "construction_permit": "construction_permit_number",
     "permit_number": "construction_permit_number",
     "permit_protocol": "construction_permit_protocol",
@@ -550,12 +572,28 @@ def permit_claim_has_context(
 ) -> bool:
     if field not in PERMIT_FIELDS:
         return True
+    if permit_value_is_bare_reference(value):
+        return _has_rich_permit_context(value, evidence_text)
     if document_type in PERMIT_DOCUMENT_TYPES:
         return True
     context = _normalize_value(f"{value} {evidence_text}")
     if any(term in context for term in PERMIT_CONTEXT_TERMS):
         return True
     return False
+
+
+def permit_value_is_bare_reference(value: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]+", "", _normalize_value(value))
+    return bool(re.fullmatch(r"(?:nr)?\d{1,8}", compact))
+
+
+def _has_rich_permit_context(value: str, evidence_text: str) -> bool:
+    context = _normalize_value(f"{value} {evidence_text}")
+    if not any(term in context for term in PERMIT_CONTEXT_TERMS):
+        return False
+    if not any(term in context for term in RICH_PERMIT_CONTEXT_TERMS):
+        return False
+    return len(re.findall(r"\d+", context)) >= 2
 
 
 def _economic_summary(

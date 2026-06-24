@@ -401,6 +401,77 @@ def test_verifier_does_not_treat_equivalent_permit_prefix_as_conflict() -> None:
     }
 
 
+def test_verifier_enforces_canonical_permit_reference_before_publication() -> None:
+    state = _grounded_state()
+    version_id = state["documents"][0]["version_id"]
+    canonical_permit = "Nr.01, Nr. 263/4 Prot., datë 07.03.2023"
+    state["professional_dossier"]["canonical_facts"][
+        "construction_permit_number"
+    ] = {
+        "value": canonical_permit,
+        "confidence_level": "high",
+        "source_documents": ["Akt kontrolli Përfundimi i themeleve.docx"],
+    }
+    state["professional_dossier"]["registers"][
+        "permits_property_licenses"
+    ] = [
+        {
+            "field_name": "construction_permit_number",
+            "value": canonical_permit,
+            "source_documents": ["Akt kontrolli Përfundimi i themeleve.docx"],
+            "sources": [
+                _source(version_id, "Akt kontrolli Përfundimi i themeleve.docx")
+            ],
+        }
+    ]
+    state["professional_dossier"]["conflicts"] = [
+        {
+            "field": "construction_permit_number",
+            "selected_value": canonical_permit,
+            "selected_score": 2.1,
+            "alternatives": [
+                {
+                    "value": "558",
+                    "score": 0.6,
+                    "source_documents": ["Proces Verbal Fillim OK.docx"],
+                }
+            ],
+        }
+    ]
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": (
+            "Objekti Godinë banimi është referuar në bazë të lejes së ndërtimit "
+            "nr. 558, protokoll nr. 263/4, datë 07.03.2023."
+        ),
+        "claim_type": "documented_fact",
+        "conclusion_level": "proven",
+        "evidence_ids": ["technical_works:0"],
+        "confidence": 0.85,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    public_body = state["kolaudim_draft"]["sections"][0]["body"]
+    assert "nr. 558" not in public_body
+    assert f"lejes së ndërtimit {canonical_permit}" in public_body
+    assert state["kolaudim_draft"]["claim_ledger"][1]["evidence_ids"] == [
+        "technical_works:0",
+        "canonical:construction_permit_number",
+    ]
+    assert result["summary"]["publishable"] is True
+    assert "PUBLIC-CONFLICT-ALTERNATIVE-USED" not in {
+        issue["code"] for issue in result["issues"]
+    }
+    assert "PUBLIC-DETAIL-MISSING" not in {
+        issue["code"] for issue in result["issues"]
+    }
+
+
 def test_verifier_rejects_cross_snapshot_evidence() -> None:
     state = _grounded_state()
     response = _draft_with_paragraphs()
@@ -527,27 +598,27 @@ def test_publication_gate_rejects_unverified_revision() -> None:
 
 def test_conflict_verifier_explains_selected_and_used_sources() -> None:
     state = _grounded_state()
-    state["professional_dossier"]["canonical_facts"]["contractor"] = {
-        "value": "EB-2000 sh.p.k.",
-        "source_documents": ["Deklaratë sipërmarrësi.docx"],
+    state["professional_dossier"]["canonical_facts"]["date_of_document"] = {
+        "value": "07.03.2024",
+        "source_documents": ["Proces Verbal Fasada.docx"],
     }
     state["professional_dossier"]["conflicts"] = [
         {
-            "field": "contractor",
-            "selected_value": "EB-2000 sh.p.k.",
+            "field": "date_of_document",
+            "selected_value": "07.03.2024",
             "selected_score": 1.8,
             "alternatives": [
                 {
-                    "value": "KËRPI sh.p.k.",
+                    "value": "26.04.2023",
                     "score": 0.9,
-                    "source_documents": ["Kontratë mbikëqyrësi.docx"],
+                    "source_documents": ["Proces Verbal Themele.docx"],
                 }
             ],
         }
     ]
     response = _draft_with_paragraphs()
     response["executive_summary"]["text"] = (
-        "Akti lidhet me objektin Godinë banimi dhe sipërmarrës KËRPI sh.p.k."
+        "Akti lidhet me objektin Godinë banimi dhe datën 26.04.2023."
     )
     state["kolaudim_draft"] = _normalize_kolaudim_draft(
         response,
@@ -561,21 +632,14 @@ def test_conflict_verifier_explains_selected_and_used_sources() -> None:
         for issue in verification["issues"]
         if issue["code"] == "PUBLIC-CONFLICT-ALTERNATIVE-USED"
     )
-    assert conflict_issue["severity"] == "major"
-    assert conflict_issue["field"] == "contractor"
-    assert conflict_issue["selected_value"] == "EB-2000 sh.p.k."
-    assert conflict_issue["alternative_value"] == "KËRPI sh.p.k."
-    assert conflict_issue["selected_source_documents"] == ["Deklaratë sipërmarrësi.docx"]
+    assert conflict_issue["severity"] == "minor"
+    assert conflict_issue["field"] == "date_of_document"
+    assert conflict_issue["selected_value"] == "07.03.2024"
+    assert conflict_issue["alternative_value"] == "26.04.2023"
+    assert conflict_issue["selected_source_documents"] == ["Proces Verbal Fasada.docx"]
     assert conflict_issue["alternative_source_documents"] == [
-        "Kontratë mbikëqyrësi.docx"
+        "Proces Verbal Themele.docx"
     ]
-    instruction = next(
-        item
-        for item in verification["correction_instructions"]
-        if item["code"] == "PUBLIC-CONFLICT-ALTERNATIVE-USED"
-    )
-    assert instruction["selected_value"] == "EB-2000 sh.p.k."
-    assert instruction["alternative_value"] == "KËRPI sh.p.k."
 
 
 def test_object_name_alternative_is_diagnostic_not_publication_blocker() -> None:

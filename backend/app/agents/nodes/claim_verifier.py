@@ -157,6 +157,7 @@ def verify_kolaudim_claims(state: AuditGraphState) -> AuditGraphState:
     if not isinstance(canonical, dict):
         canonical = {}
 
+    _enforce_canonical_public_values(draft, dossier)
     catalog = build_claim_evidence_catalog(state)
     current_versions = current_file_version_ids(state)
     issues: list[dict[str, Any]] = []
@@ -698,6 +699,170 @@ def _verify_conflicting_alternatives(
                     }
                 )
                 break
+
+
+PERMIT_REFERENCE_FIELDS = {
+    "construction_permit_number",
+    "construction_permit_protocol",
+    "construction_permit_date",
+    "development_permit_number",
+    "development_permit_protocol",
+    "development_permit_date",
+}
+
+
+def _enforce_canonical_public_values(
+    draft: dict[str, Any],
+    dossier: object,
+) -> None:
+    if not isinstance(dossier, dict):
+        return
+    conflicts = dossier.get("conflicts")
+    if not isinstance(conflicts, list):
+        return
+
+    changes: list[dict[str, str]] = []
+    for conflict in conflicts:
+        if not isinstance(conflict, dict):
+            continue
+        field = str(conflict.get("field") or "").strip()
+        if field not in PUBLIC_BLOCKING_CONFLICT_FIELDS:
+            continue
+        selected = str(conflict.get("selected_value") or "").strip()
+        if not selected:
+            continue
+        evidence_ids = [canonical_evidence_id(field)]
+        alternatives = conflict.get("alternatives")
+        if not isinstance(alternatives, list):
+            continue
+        for alternative in alternatives:
+            if not isinstance(alternative, dict):
+                continue
+            value = str(alternative.get("value") or "").strip()
+            if not value or _material_values_equivalent(selected, value):
+                continue
+            replacement_count = _replace_public_draft_value(
+                draft,
+                field=field,
+                alternative=value,
+                selected=selected,
+                evidence_ids=evidence_ids,
+            )
+            if replacement_count:
+                changes.append(
+                    {
+                        "field": field,
+                        "selected_value": selected,
+                        "alternative_value": value,
+                    }
+                )
+
+    if changes:
+        draft["canonical_public_enforcement"] = changes
+
+
+def _replace_public_draft_value(
+    draft: dict[str, Any],
+    *,
+    field: str,
+    alternative: str,
+    selected: str,
+    evidence_ids: list[str],
+) -> int:
+    replacement_count = 0
+    for key in ("executive_summary", "signature_note"):
+        if not isinstance(draft.get(key), str):
+            continue
+        replacement, count = _replace_public_value(
+            draft[key],
+            field=field,
+            alternative=alternative,
+            selected=selected,
+        )
+        if count:
+            draft[key] = replacement
+            replacement_count += count
+
+    sections = draft.get("sections")
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            for key in ("title", "body"):
+                if not isinstance(section.get(key), str):
+                    continue
+                replacement, count = _replace_public_value(
+                    section[key],
+                    field=field,
+                    alternative=alternative,
+                    selected=selected,
+                )
+                if count:
+                    section[key] = replacement
+                    replacement_count += count
+
+    ledger = draft.get("claim_ledger")
+    if isinstance(ledger, list):
+        for claim in ledger:
+            if not isinstance(claim, dict) or not isinstance(
+                claim.get("statement"),
+                str,
+            ):
+                continue
+            replacement, count = _replace_public_value(
+                claim["statement"],
+                field=field,
+                alternative=alternative,
+                selected=selected,
+            )
+            if not count:
+                continue
+            claim["statement"] = replacement
+            raw_ids = claim.get("evidence_ids")
+            if not isinstance(raw_ids, list):
+                raw_ids = []
+            claim["evidence_ids"] = list(
+                dict.fromkeys([*map(str, raw_ids), *evidence_ids])
+            )
+            replacement_count += count
+
+    return replacement_count
+
+
+def _replace_public_value(
+    text: str,
+    *,
+    field: str,
+    alternative: str,
+    selected: str,
+) -> tuple[str, int]:
+    if not alternative or not selected or alternative == selected:
+        return text, 0
+    if field in PERMIT_REFERENCE_FIELDS:
+        replacement, count = _replace_permit_reference(text, alternative, selected)
+        if count:
+            return replacement, count
+    if alternative in text:
+        return text.replace(alternative, selected), text.count(alternative)
+    if re.fullmatch(r"\d+", alternative):
+        return re.subn(rf"(?<!\d){re.escape(alternative)}(?!\d)", selected, text)
+    return text, 0
+
+
+def _replace_permit_reference(
+    text: str,
+    alternative: str,
+    selected: str,
+) -> tuple[str, int]:
+    pattern = re.compile(
+        r"\b((?:leje|lejes?)\s+(?:s[eë]\s+)?nd[eë]rtimit\s+)"
+        r"(?:nr\.?\s*)?"
+        rf"{re.escape(alternative)}"
+        r"(?:\s*,\s*(?:protokoll|prot\.?)\s*(?:nr\.?\s*)?[\w./-]+)?"
+        r"(?:\s*,\s*dat[eë]?\s*[\d./-]+)?",
+        re.I,
+    )
+    return pattern.subn(lambda match: f"{match.group(1)}{selected}", text)
 
 
 def _correction_instruction(issue: dict[str, Any]) -> dict[str, Any]:

@@ -13,6 +13,7 @@ from app.agents.nodes.kolaudim_writer import (
     _build_kolaudim_writer_input,
     write_kolaudim_draft,
 )
+from app.agents.public_formatting import format_public_text, format_public_value
 from app.agents.public_details import select_required_public_details
 from app.agents.nodes.law_retriever import retrieve_laws
 from app.agents.nodes.project_context import load_project_context
@@ -1023,6 +1024,149 @@ def test_required_public_details_skip_stakeholders_and_normalize_permit_alias() 
             "source_documents": [],
         }
     ]
+
+
+def test_required_public_details_skip_bare_permit_reference() -> None:
+    details = select_required_public_details(
+        {
+            "registers": {
+                "permits_property_licenses": [
+                    {
+                        "field_name": "construction_permit_number",
+                        "value": "558",
+                        "source_documents": ["1.3 Proces Verbal Fillim OK.docx"],
+                    },
+                    {
+                        "field_name": "building_permit",
+                        "value": "Nr. 558",
+                        "source_documents": ["1.3 Proces Verbal Fillim OK.docx"],
+                    },
+                ],
+            }
+        }
+    )
+
+    assert details == []
+
+
+def test_required_public_details_skip_role_name_text_alias() -> None:
+    details = select_required_public_details(
+        {
+            "registers": {
+                "contracts_and_economics": [
+                    {
+                        "field_name": "contractor_name_text",
+                        "value": "EB-2000 shpk",
+                        "source_documents": ["1.3 Proces Verbal Fillim OK.docx"],
+                    },
+                    {
+                        "field_name": "supervisor_name_text",
+                        "value": "Alisha Kerpi",
+                        "source_documents": ["1.3 Proces Verbal Fillim OK.docx"],
+                    },
+                ],
+            }
+        }
+    )
+
+    assert details == []
+
+
+def test_public_formatting_cleans_units_and_common_albanian_display() -> None:
+    assert format_public_text("Sipërfaqja është 94.7(54m2 podrum).") == (
+        "Sipërfaqja është 94.7 m², nga të cilat 54 m² podrum."
+    )
+    assert format_public_text("Rezistenca është 2500 kg/cm2.") == (
+        "Rezistenca është 2500 kg/cm²."
+    )
+    assert format_public_value(
+        "Fshati Ngraçan, Bashkia Mallakaster",
+        "location",
+    ) == "Fshati Ngraçan, Bashkia Mallakastër"
+
+
+def test_required_public_details_skip_generic_contract_reference() -> None:
+    details = select_required_public_details(
+        {
+            "registers": {
+                "contracts_and_economics": [
+                    {
+                        "field_name": "contract_reference",
+                        "value": "Nr. Rep. 1, Nr. Kol. 2",
+                    },
+                    {
+                        "field_name": "contractor_contract_reference",
+                        "value": "Nr. Rep. 2026, Nr. Kol. 1251",
+                    },
+                ],
+            }
+        }
+    )
+
+    assert len(details) == 1
+    assert details[0]["field_name"] == "contractor_contract_reference"
+
+
+def test_writer_input_separates_contract_references_by_role() -> None:
+    state = {
+        "project": {"name": "Dosja Teknike"},
+        "job": {"job_type": "kolaudim_act", "law_scope": ["VKM_610_2022"]},
+        "documents": [],
+        "professional_dossier": {
+            "canonical_facts": {},
+            "registers": {
+                "contracts_and_economics": [
+                    {
+                        "field_name": "contract_reference",
+                        "value": "Nr. Rep. 100, Nr. Kol. 200",
+                        "source_documents": ["Kontrate e paqartë.docx"],
+                    },
+                    {
+                        "field_name": "contractor_contract_reference",
+                        "value": "Nr. Rep. 2026, Nr. Kol. 1251, datë 18.11.2022",
+                        "source_documents": ["Kontrate Sipermarrje.docx"],
+                    },
+                    {
+                        "field_name": "supervisor_contract_reference",
+                        "value": "Nr. Rep. 4519, Nr. Kol. 2115, datë 17.09.2025",
+                        "source_documents": ["Kontrate Mbikqyresin.docx"],
+                    },
+                ],
+            },
+            "scoped_facts": {},
+            "economic_summary": {},
+            "evidence_coverage": {},
+            "integrity_issues": [],
+            "document_records": [],
+            "chronology": [],
+            "technical_observations": [],
+            "conflicts": [],
+            "evidence_by_section": {},
+            "style_references": [],
+            "missing_core_fields": [],
+            "summary": {"persisted_analysis_count": 1},
+        },
+        "kolaudim_analysis": {"sections": []},
+        "rules": [],
+    }
+
+    writer_input = _build_kolaudim_writer_input(
+        state,
+        ai_settings={
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "api_key": "test",
+        },
+    )
+
+    summary = writer_input["contract_reference_policy"]["role_specific_references"]
+    assert summary["role_specific"]["contractor"]["value"] == (
+        "Nr. Rep. 2026, Nr. Kol. 1251, datë 18.11.2022"
+    )
+    assert summary["role_specific"]["supervisor"]["value"] == (
+        "Nr. Rep. 4519, Nr. Kol. 2115, datë 17.09.2025"
+    )
+    assert summary["generic_references"][0]["value"] == "Nr. Rep. 100, Nr. Kol. 200"
 
 
 def test_claim_verifier_accepts_clean_human_style_act() -> None:

@@ -116,35 +116,35 @@
       <tbody>
         <tr>
           <th>Emërtimi i objektit</th>
-          <td>{{ facts.get("object_name", {}).get("value") or report.project.name }}</td>
+          <td>{{ (facts.get("object_name", {}).get("value") or report.project.name)|public_value("object_name") }}</td>
         </tr>
         <tr>
           <th>Vendndodhja</th>
-          <td>{{ facts.get("location", {}).get("value") or report.project.location or "E papërcaktuar në dosje" }}</td>
+          <td>{{ (facts.get("location", {}).get("value") or report.project.location or "E papërcaktuar në dosje")|public_value("location") }}</td>
         </tr>
         <tr>
           <th>Zhvilluesi / Investitori</th>
-          <td>{{ facts.get("investor", {}).get("value") or "Nuk rezulton i provuar në dosje" }}</td>
+          <td>{{ (facts.get("investor", {}).get("value") or "Nuk rezulton i provuar në dosje")|public_value("investor") }}</td>
         </tr>
         <tr>
           <th>Zbatuesi</th>
-          <td>{{ facts.get("contractor", {}).get("value") or "Nuk rezulton i provuar në dosje" }}</td>
+          <td>{{ (facts.get("contractor", {}).get("value") or "Nuk rezulton i provuar në dosje")|public_value("contractor") }}</td>
         </tr>
         <tr>
           <th>Mbikëqyrësi</th>
           <td>
-            {{ facts.get("supervisor", {}).get("value") or "Nuk rezulton i provuar në dosje" }}
+            {{ (facts.get("supervisor", {}).get("value") or "Nuk rezulton i provuar në dosje")|public_value("supervisor") }}
             {% if facts.get("supervisor_license", {}).get("value") %}
-            — Lic. {{ facts.get("supervisor_license", {}).get("value") }}
+            — Lic. {{ facts.get("supervisor_license", {}).get("value")|public_value("supervisor_license") }}
             {% endif %}
           </td>
         </tr>
         <tr>
           <th>Kolaudatori</th>
           <td>
-            {{ facts.get("kolaudator", {}).get("value") or "Nuk rezulton i provuar në dosje" }}
+            {{ (facts.get("kolaudator", {}).get("value") or "Nuk rezulton i provuar në dosje")|public_value("kolaudator") }}
             {% if facts.get("kolaudator_license", {}).get("value") %}
-            — Lic. {{ facts.get("kolaudator_license", {}).get("value") }}
+            — Lic. {{ facts.get("kolaudator_license", {}).get("value")|public_value("kolaudator_license") }}
             {% endif %}
           </td>
         </tr>
@@ -174,21 +174,21 @@
           <tr>
             <td>
               Investitori / Zhvilluesi
-              <span class="signature-name">{{ facts.get("investor", {}).get("value") or "" }}</span>
+              <span class="signature-name">{{ (facts.get("investor", {}).get("value") or "")|public_value("investor") }}</span>
             </td>
             <td>
               Zbatuesi i punimeve
-              <span class="signature-name">{{ facts.get("contractor", {}).get("value") or "" }}</span>
+              <span class="signature-name">{{ (facts.get("contractor", {}).get("value") or "")|public_value("contractor") }}</span>
             </td>
           </tr>
           <tr>
             <td>
               Mbikëqyrësi i punimeve
-              <span class="signature-name">{{ facts.get("supervisor", {}).get("value") or "" }}</span>
+              <span class="signature-name">{{ (facts.get("supervisor", {}).get("value") or "")|public_value("supervisor") }}</span>
             </td>
             <td>
               Kolaudatori i punimeve
-              <span class="signature-name">{{ facts.get("kolaudator", {}).get("value") or "" }}</span>
+              <span class="signature-name">{{ (facts.get("kolaudator", {}).get("value") or "")|public_value("kolaudator") }}</span>
             </td>
           </tr>
         </tbody>
