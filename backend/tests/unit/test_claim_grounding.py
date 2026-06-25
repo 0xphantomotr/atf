@@ -278,7 +278,7 @@ def test_verifier_rejects_qualified_claim_without_limiting_language() -> None:
     state = _grounded_state()
     response = _draft_with_paragraphs()
     response["sections"][0]["paragraphs"][0] = {
-        "text": "Punimet janë kryer në përputhje me projektin e zbatimit.",
+        "text": "Dokumentet e administruara krijojnë bazë për vijimin e Aktit.",
         "claim_type": "professional_inference",
         "conclusion_level": "qualified",
         "evidence_ids": ["technical_works:0", "declarations_and_conclusions:0"],
@@ -318,6 +318,40 @@ def test_verifier_accepts_qualified_claim_with_limiting_language() -> None:
 
     assert "CLAIM-CONCLUSION-LEVEL-LANGUAGE" not in {
         issue["code"] for issue in result["issues"]
+    }
+
+
+def test_publication_gate_repairs_conclusion_language_only_failure() -> None:
+    state = _grounded_state()
+    response = _draft_with_paragraphs()
+    response["sections"][0]["paragraphs"][0] = {
+        "text": "Dokumentet e administruara krijojnë bazë për vijimin e Aktit.",
+        "claim_type": "professional_inference",
+        "conclusion_level": "qualified",
+        "evidence_ids": ["technical_works:0", "declarations_and_conclusions:0"],
+        "confidence": 0.7,
+    }
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+    verify_kolaudim_claims(state)
+
+    assert state["claim_verification"]["summary"]["publishable"] is False
+    assert {
+        issue["code"]
+        for issue in state["claim_verification"]["issues"]
+        if issue["severity"] == "major"
+    } == {"CLAIM-CONCLUSION-LEVEL-LANGUAGE"}
+
+    enforce_publishable_kolaudim(state)
+
+    assert state["kolaudim_language_repair"]["status"] == "applied"
+    assert state["claim_verification"]["summary"]["publishable"] is True
+    repaired_body = state["kolaudim_draft"]["sections"][0]["body"]
+    assert "sipas dokumentacionit të administruar" in repaired_body
+    assert "CLAIM-CONCLUSION-LEVEL-LANGUAGE" not in {
+        issue["code"] for issue in state["claim_verification"]["issues"]
     }
 
 

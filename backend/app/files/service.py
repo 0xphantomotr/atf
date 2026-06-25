@@ -27,7 +27,7 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 SPOOL_MAX_BYTES = 10 * 1024 * 1024
 MAX_BULK_FILES = 250
 MAX_ZIP_EXTRACTED_BYTES = 300 * 1024 * 1024
-ZIP_IMPORT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".jpg", ".jpeg", ".png"}
+ZIP_IMPORT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".mpp", ".jpg", ".jpeg", ".png"}
 
 
 def normalize_filename(filename: str) -> str:
@@ -109,7 +109,7 @@ def _unsupported_file_reason(filename: str) -> str:
     if suffix == ".doc":
         return "format Word .doc nuk lexohet ende; konvertojeni në .docx"
     if suffix == ".mpp":
-        return "format Microsoft Project .mpp nuk mbështetet ende"
+        return "format Microsoft Project .mpp nuk mund të lexohej"
     return "format i pambështetur"
 
 
@@ -199,7 +199,7 @@ async def create_project_file(
     if not upload.filename or not is_supported_filename(upload.filename):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Formati nuk mbështetet. Ngarkoni PDF, DOCX, XLSX, ZIP, JPG ose PNG.",
+            detail="Formati nuk mbështetet. Ngarkoni PDF, DOCX, XLSX, MPP, ZIP, JPG ose PNG.",
         )
 
     content_type = upload.content_type or "application/octet-stream"

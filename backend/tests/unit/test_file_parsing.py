@@ -15,6 +15,7 @@ from app.files.parse_service import (
     _completed_parse_status,
     _parse_image,
     _parse_docx,
+    _parse_mpp,
     _parse_pdf,
     _replace_document_chunks,
     _split_text,
@@ -258,6 +259,28 @@ def test_parse_docx_preserves_paragraph_and_table_coordinates() -> None:
     assert parsed["chunks"][2]["metadata"]["paragraph_start"] == 2
     assert "Fusha | Vlera" in parsed["text_content"]
     assert "Konkluzioni teknik" in parsed["text_content"]
+
+
+def test_parse_mpp_extracts_schedule_strings_from_binary() -> None:
+    task_lines = "\n".join(
+        [
+            "AFATI I PUNIMEVE",
+            "Njoftim fillim punimesh | Duration: 0 days | Start: Mon 3/20/23 | Finish: Mon 3/20/23",
+            "Ndertimi i themeleve | Duration: 487 days | Start: Mon 4/24/23 | Finish: Tue 3/4/25",
+            "Akti I Kolaudimit | Duration: 10 days | Start: Thu 3/27/25 | Finish: Wed 4/9/25",
+        ]
+    )
+    payload = b"\xd0\xcf\x11\xe0" + task_lines.encode("utf-16le")
+
+    parsed = _parse_mpp(payload)
+
+    assert parsed["metadata"]["parser"] == "mpp-best-effort-strings"
+    assert parsed["metadata"]["extraction_status"] == "partial"
+    assert parsed["chunks"][0]["metadata"]["source_type"] == "mpp_schedule"
+    assert parsed["chunks"][0]["metadata"]["extraction_method"] == "binary_string_scan"
+    assert "AFATI I PUNIMEVE" in parsed["text_content"]
+    assert "Akti I Kolaudimit" in parsed["text_content"]
+    assert "Start: Thu 3/27/25" in parsed["text_content"]
 
 
 def test_replace_document_chunks_deletes_old_rows_and_restarts_indexes() -> None:

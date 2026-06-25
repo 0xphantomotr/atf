@@ -79,6 +79,7 @@ DOCUMENT_TYPE_LABELS = {
         "policë sigurimi për përgjegjësi profesionale"
     ),
     "professional_license": "licencë/certifikatë profesionale",
+    "project_schedule": "grafik/kronologji punimesh",
     "safety_documentation": "dokumentacion sigurie",
     "seismic_study": "studim sizmik",
     "setting_out_act": "akt piketimi",

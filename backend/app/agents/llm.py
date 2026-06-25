@@ -673,7 +673,7 @@ def _document_analysis_user_content(analysis_input: dict[str, Any]) -> str:
                     "category": (
                         "identity | party | permit | property | chronology | contract | "
                         "economic | technical | work_phase | control_act | material | "
-                        "test | declaration | reservation | conclusion | other"
+                        "test | declaration | schedule | reservation | conclusion | other"
                     ),
                     "field_name": "stable snake_case field name",
                     "original_value": "value exactly as stated",

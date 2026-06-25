@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     ocr_min_confidence: float = Field(default=30.0, ge=0, le=100)
     ocr_page_timeout_seconds: int = Field(default=120, ge=10, le=600)
 
+    mpp_extractor_command: str = ""
+    mpp_extractor_timeout_seconds: int = Field(default=120, ge=5, le=600)
+
 
 @lru_cache
 def get_settings() -> Settings:

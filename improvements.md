@@ -130,7 +130,9 @@ an unsupported conclusion more convincingly.
 
 - [ ] Add XLSX worksheet, row and formula extraction.
 - [ ] Add controlled conversion and extraction for legacy `.doc` files.
-- [ ] Add MPP task, dependency, milestone and deadline extraction.
+- [x] Add MPP schedule extraction into the evidence pipeline.
+- [ ] Add a bundled structured MPP converter for full dependency/milestone/deadline
+  extraction without relying on best-effort binary text scanning.
 - [ ] Backfill chunks for files parsed before chunk persistence was introduced.
 
 ### Model routing and quota efficiency
@@ -173,7 +175,7 @@ an unsupported conclusion more convincingly.
 1. Claim-grounded finalization and one bounded correction pass.
 2. OCR for scanned PDF evidence.
 3. Stage-specific model routing and quota-aware resumability.
-4. XLSX, legacy DOC and MPP ingestion plus chunk backfill.
+4. XLSX, legacy DOC, structured MPP conversion and chunk backfill.
 5. Reproducible job snapshots and multi-project acceptance tests.
 6. Final PDF typography and pagination polish.
 

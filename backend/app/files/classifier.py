@@ -318,6 +318,24 @@ DOCUMENT_SIGNATURES: tuple[DocumentSignature, ...] = (
         "ditari i punimeve",
     ),
     DocumentSignature(
+        "project_schedule",
+        ("afati", "punim"),
+        0.86,
+        "afati i punimeve",
+    ),
+    DocumentSignature(
+        "project_schedule",
+        ("task", "duration", "start", "finish"),
+        0.84,
+        "project schedule task fields",
+    ),
+    DocumentSignature(
+        "project_schedule",
+        ("kronologji", "punim"),
+        0.84,
+        "kronologjia e punimeve",
+    ),
+    DocumentSignature(
         "monthly_situations",
         ("situacion", "mujor"),
         0.82,
@@ -499,6 +517,24 @@ FILENAME_SIGNATURES: tuple[DocumentSignature, ...] = (
         ("ditari", "objekt"),
         0.98,
         "filename: ditari i objektit",
+    ),
+    DocumentSignature(
+        "project_schedule",
+        ("kronologji",),
+        0.98,
+        "filename: kronologji punimesh",
+    ),
+    DocumentSignature(
+        "project_schedule",
+        ("afati", "punim"),
+        0.98,
+        "filename: afati i punimeve",
+    ),
+    DocumentSignature(
+        "project_schedule",
+        ("schedule",),
+        0.94,
+        "filename: project schedule",
     ),
     DocumentSignature(
         "site_book",

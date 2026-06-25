@@ -1,6 +1,11 @@
+import json
+import re
+import shlex
+import subprocess
 import uuid
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from pypdf import PdfReader
@@ -20,6 +25,33 @@ from app.files.ocr import (
 MAX_CHUNK_CHARS = 4_000
 CHUNKING_VERSION = 2
 OCR_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+MPP_SCHEDULE_TERMS = (
+    "afati",
+    "punim",
+    "proces",
+    "verbal",
+    "akt",
+    "njoftim",
+    "fillim",
+    "perfundim",
+    "përfundim",
+    "theme",
+    "karabina",
+    "fasad",
+    "sistem",
+    "kolaudim",
+    "task",
+    "duration",
+    "start",
+    "finish",
+    "predecessor",
+)
+MPP_DATE_PATTERN = re.compile(
+    r"\b(?:mon|tue|wed|thu|fri|sat|sun)?\s*"
+    r"(?:[0-3]?\d[./-][01]?\d[./-](?:19|20)?\d{2}|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2},?\s+(?:19|20)?\d{2})\b",
+    re.I,
+)
 
 
 async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUID) -> None:
@@ -37,6 +69,8 @@ async def parse_file_version(session: AsyncSession, *, file_version_id: uuid.UUI
             parsed = _parse_pdf(file_bytes)
         elif suffix == ".docx":
             parsed = _parse_docx(file_bytes)
+        elif suffix == ".mpp":
+            parsed = _parse_mpp(file_bytes)
         elif suffix in OCR_IMAGE_EXTENSIONS:
             parsed = _parse_image(file_bytes, suffix=suffix)
         else:
@@ -358,6 +392,326 @@ def _parse_docx(docx_bytes: bytes) -> dict:
             "chunking_version": CHUNKING_VERSION,
         },
     }
+
+
+def _parse_mpp(
+    mpp_bytes: bytes,
+    *,
+    extractor_command: str | None = None,
+) -> dict:
+    command = settings.mpp_extractor_command if extractor_command is None else extractor_command
+    external_error: str | None = None
+    if command:
+        try:
+            parsed = _parse_mpp_with_command(mpp_bytes, command=command)
+            if parsed["chunks"]:
+                return parsed
+        except Exception as exc:
+            external_error = str(exc)[:1_000]
+
+    parsed = _parse_mpp_best_effort_strings(mpp_bytes)
+    parsed["metadata"]["external_extractor"] = {
+        "configured": bool(command),
+        "status": "failed" if external_error else "not_configured",
+        "error": external_error,
+    }
+    return parsed
+
+
+def _parse_mpp_with_command(mpp_bytes: bytes, *, command: str) -> dict:
+    with TemporaryDirectory(prefix="atf-mpp-") as temp_dir:
+        input_path = Path(temp_dir) / "input.mpp"
+        output_path = Path(temp_dir) / "output.json"
+        input_path.write_bytes(mpp_bytes)
+
+        formatted_command = command.format(
+            input=str(input_path),
+            output=str(output_path),
+        )
+        result = subprocess.run(  # noqa: S603 - operator-configured local extractor.
+            shlex.split(formatted_command),
+            check=False,
+            capture_output=True,
+            timeout=settings.mpp_extractor_timeout_seconds,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace")
+            stdout = result.stdout.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"MPP extractor failed with code {result.returncode}: "
+                f"{(stderr or stdout)[:500]}"
+            )
+
+        output_text = ""
+        if output_path.exists() and output_path.stat().st_size:
+            output_text = output_path.read_text(encoding="utf-8", errors="replace")
+        if not output_text:
+            output_text = result.stdout.decode("utf-8", errors="replace")
+        if not output_text.strip():
+            raise RuntimeError("MPP extractor returned no output.")
+
+    return _parse_mpp_external_output(output_text)
+
+
+def _parse_mpp_external_output(output_text: str) -> dict:
+    try:
+        payload = json.loads(output_text)
+    except json.JSONDecodeError:
+        return _mpp_text_lines_to_parsed(
+            _clean_extracted_lines(output_text.splitlines()),
+            parser="mpp-external-text",
+            extraction_method="external_command_text",
+            extraction_status="parsed",
+            extra_metadata={"structured": False},
+        )
+
+    tasks = _mpp_tasks_from_payload(payload)
+    if tasks:
+        lines = [_mpp_task_line(index, task) for index, task in enumerate(tasks, start=1)]
+        return _mpp_text_lines_to_parsed(
+            lines,
+            parser="mpp-external-json",
+            extraction_method="external_command_json",
+            extraction_status="parsed",
+            extra_metadata={
+                "structured": True,
+                "task_count": len(tasks),
+            },
+        )
+
+    if isinstance(payload, dict):
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    else:
+        text = json.dumps({"data": payload}, ensure_ascii=False, indent=2)
+    return _mpp_text_lines_to_parsed(
+        _clean_extracted_lines(text.splitlines()),
+        parser="mpp-external-json",
+        extraction_method="external_command_json",
+        extraction_status="partial",
+        extra_metadata={"structured": False},
+    )
+
+
+def _mpp_tasks_from_payload(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("tasks", "activities", "rows", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _mpp_task_line(index: int, task: dict[str, Any]) -> str:
+    field_aliases = {
+        "id": ("id", "uid", "unique_id", "uniqueID"),
+        "wbs": ("wbs", "outline_number", "outlineNumber"),
+        "name": ("name", "task_name", "taskName", "text", "title"),
+        "duration": ("duration", "duration_text", "durationText"),
+        "start": ("start", "start_date", "startDate"),
+        "finish": ("finish", "finish_date", "finishDate", "end"),
+        "predecessors": ("predecessors", "predecessor", "predecessor_ids"),
+        "percent_complete": ("percent_complete", "percentComplete", "complete"),
+        "resources": ("resources", "resource_names", "resourceNames"),
+    }
+    parts = [f"Rreshti {index}"]
+    for label, aliases in field_aliases.items():
+        value = next(
+            (
+                task.get(alias)
+                for alias in aliases
+                if task.get(alias) not in {None, "", []}
+            ),
+            None,
+        )
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value if str(item).strip())
+        if value is not None and str(value).strip():
+            parts.append(f"{label}: {value}")
+    return " | ".join(parts)
+
+
+def _parse_mpp_best_effort_strings(mpp_bytes: bytes) -> dict:
+    ascii_strings = _extract_ascii_strings(mpp_bytes)
+    utf16_strings = _extract_utf16le_strings(mpp_bytes)
+    raw_lines = _deduplicate_lines([*utf16_strings, *ascii_strings])
+    candidate_lines = _select_mpp_schedule_lines(raw_lines)
+    if not candidate_lines:
+        candidate_lines = raw_lines[:300]
+
+    heading = (
+        "Ekstrakt tekstual best-effort nga skedari Microsoft Project (MPP). "
+        "Përdoret për kronologji orientuese; varësitë, datat dhe përqindjet duhen "
+        "verifikuar me skedarin origjinal kur mungojnë në tekst."
+    )
+    lines = [heading, *candidate_lines]
+    return _mpp_text_lines_to_parsed(
+        lines,
+        parser="mpp-best-effort-strings",
+        extraction_method="binary_string_scan",
+        extraction_status="partial",
+        extra_metadata={
+            "ascii_string_count": len(ascii_strings),
+            "utf16_string_count": len(utf16_strings),
+            "selected_line_count": len(candidate_lines),
+        },
+    )
+
+
+def _mpp_text_lines_to_parsed(
+    lines: list[str],
+    *,
+    parser: str,
+    extraction_method: str,
+    extraction_status: str,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict:
+    clean_lines = _clean_extracted_lines(lines)
+    text_content = "\n".join(clean_lines)
+    chunks: list[dict[str, Any]] = []
+    current: list[tuple[int, str]] = []
+    current_length = 0
+
+    def flush() -> None:
+        nonlocal current, current_length
+        if not current:
+            return
+        chunks.append(
+            {
+                "text": "\n".join(line for _, line in current),
+                "page_start": None,
+                "page_end": None,
+                "metadata": {
+                    "source_type": "mpp_schedule",
+                    "extraction_method": extraction_method,
+                    "row_start": current[0][0],
+                    "row_end": current[-1][0],
+                },
+            }
+        )
+        current = []
+        current_length = 0
+
+    for row_index, line in enumerate(clean_lines, start=1):
+        line_parts = _split_text(line)
+        for part in line_parts:
+            separator_length = 1 if current else 0
+            if current and current_length + separator_length + len(part) > MAX_CHUNK_CHARS:
+                flush()
+            current.append((row_index, part))
+            current_length += (1 if current_length else 0) + len(part)
+    flush()
+
+    return {
+        "text_content": text_content,
+        "page_count": None,
+        "chunks": chunks,
+        "metadata": {
+            "parser": parser,
+            "extraction_status": extraction_status,
+            "line_count": len(clean_lines),
+            "chunk_count": len(chunks),
+            "chunking_version": CHUNKING_VERSION,
+            **(extra_metadata or {}),
+        },
+    }
+
+
+def _extract_ascii_strings(data: bytes, *, min_length: int = 4) -> list[str]:
+    strings: list[str] = []
+    current = bytearray()
+    for byte in data:
+        if byte in {9, 10, 13} or 32 <= byte <= 126:
+            current.append(byte)
+            continue
+        if len(current) >= min_length:
+            strings.append(current.decode("latin-1", errors="ignore"))
+        current = bytearray()
+    if len(current) >= min_length:
+        strings.append(current.decode("latin-1", errors="ignore"))
+    return strings
+
+
+def _extract_utf16le_strings(data: bytes, *, min_length: int = 4) -> list[str]:
+    strings: list[str] = []
+    for offset in (0, 1):
+        current: list[str] = []
+        for index in range(offset, len(data) - 1, 2):
+            codepoint = data[index] | (data[index + 1] << 8)
+            character = chr(codepoint)
+            if character in {"\t", "\n", "\r"} or (
+                character.isprintable() and not character.isspace()
+            ) or character == " ":
+                current.append(character)
+                continue
+            if len(current) >= min_length:
+                strings.append("".join(current))
+            current = []
+        if len(current) >= min_length:
+            strings.append("".join(current))
+    return strings
+
+
+def _select_mpp_schedule_lines(lines: list[str]) -> list[str]:
+    selected: list[str] = []
+    for line in lines:
+        normalized = _normalize_mpp_line(line).lower()
+        has_term = any(term in normalized for term in MPP_SCHEDULE_TERMS)
+        has_date = bool(MPP_DATE_PATTERN.search(normalized))
+        if has_term or has_date:
+            selected.append(line)
+    return selected[:500]
+
+
+def _clean_extracted_lines(lines: list[str]) -> list[str]:
+    return _deduplicate_lines(
+        [
+            cleaned
+            for line in lines
+            if (cleaned := _normalize_mpp_line(str(line)))
+            and _is_useful_mpp_line(cleaned)
+        ]
+    )
+
+
+def _normalize_mpp_line(line: str) -> str:
+    line = line.replace("\x00", " ")
+    line = re.sub(r"[\x01-\x08\x0b-\x1f\x7f]+", " ", line)
+    line = " ".join(line.split())
+    return line.strip()
+
+
+def _is_useful_mpp_line(line: str) -> bool:
+    if len(line) < 3 or len(line) > 500:
+        return False
+    lowered = line.lower()
+    low_value_markers = {
+        "root entry",
+        "compobj",
+        "summaryinformation",
+        "document summaryinformation",
+        "microsoft project",
+        "projectdata",
+    }
+    if lowered in low_value_markers:
+        return False
+    alpha_count = sum(1 for character in line if character.isalpha())
+    digit_count = sum(1 for character in line if character.isdigit())
+    return alpha_count >= 2 or digit_count >= 4
+
+
+def _deduplicate_lines(lines: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduplicated: list[str] = []
+    for line in lines:
+        key = line.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(line)
+    return deduplicated
 
 
 def _normalize_cell_text(value: str) -> str:

@@ -13,6 +13,16 @@ class ClaimVerificationError(RuntimeError):
     pass
 
 
+CONCLUSION_LANGUAGE_CODE = "CLAIM-CONCLUSION-LEVEL-LANGUAGE"
+LIMITING_LANGUAGE_PATTERN = re.compile(
+    r"\b(?:nuk\s+(?:rezulton|provohet|vertetohet|konfirmohet)|"
+    r"(?:nga|sipas|referuar)\s+dokumentacionit|"
+    r"bazuar\s+ne\s+dokumentacion|ne\s+baze\s+te\s+dokumentacionit|"
+    r"pa\s+u\s+verifikuar|mbetet\s+per\s+t\s+u\s+verifikuar|"
+    r"per\s+t\s+u\s+verifikuar|kerkon\s+verifikim|duhet\s+verifikuar|"
+    r"me\s+rezerv[eë]|e\s+kufizuar|projekt-akt)\b",
+    re.I,
+)
 MAX_SUPPLEMENTAL_EVIDENCE_PER_REGISTER = 8
 ISSUE_SUPPORT_REGISTERS: dict[str, set[str]] = {
     "CLAIM-COMPLETION-EVIDENCE": {
@@ -140,6 +150,29 @@ def enforce_publishable_kolaudim(state: AuditGraphState) -> AuditGraphState:
             for issue in verification.get("issues", [])
             if isinstance(issue, dict) and issue.get("severity") == "major"
         ][:8]
+        if _is_conclusion_language_only(major_issues):
+            repaired_count = _apply_conclusion_language_repair(draft, major_issues)
+            if repaired_count:
+                state["kolaudim_draft"] = draft
+                state["kolaudim_language_repair"] = {
+                    "status": "applied",
+                    "repaired_claim_count": repaired_count,
+                    "reason": CONCLUSION_LANGUAGE_CODE,
+                }
+                state.setdefault("agent_trace", []).append("conclusion_language_repair")
+                from app.agents.nodes.claim_verifier import verify_kolaudim_claims
+
+                verify_kolaudim_claims(state)
+                verification = state.get("claim_verification", {})
+                if isinstance(verification, dict) and verification.get("summary", {}).get(
+                    "publishable"
+                ):
+                    return state
+                major_issues = [
+                    issue
+                    for issue in verification.get("issues", [])
+                    if isinstance(issue, dict) and issue.get("severity") == "major"
+                ][:8]
         detail = _publish_block_detail(major_issues)
         raise ClaimVerificationError(
             "Drafti i Akt-Kolaudimit mbeti i pambështetur pas një korrigjimi: "
@@ -153,6 +186,91 @@ def _publish_block_detail(issues: list[dict[str, Any]]) -> str:
         return "verification_failed"
     details = [_issue_detail(issue) for issue in issues]
     return " | ".join(detail for detail in details if detail) or "verification_failed"
+
+
+def _is_conclusion_language_only(issues: list[dict[str, Any]]) -> bool:
+    return bool(issues) and all(
+        str(issue.get("code") or "") == CONCLUSION_LANGUAGE_CODE for issue in issues
+    )
+
+
+def _apply_conclusion_language_repair(
+    draft: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> int:
+    issue_claim_ids = {
+        str(issue.get("claim_id") or "").strip()
+        for issue in issues
+        if str(issue.get("claim_id") or "").strip()
+    }
+    claim_ledger = draft.get("claim_ledger")
+    if not isinstance(claim_ledger, list):
+        return 0
+
+    repaired_count = 0
+    for claim in claim_ledger:
+        if not isinstance(claim, dict):
+            continue
+        claim_id = str(claim.get("claim_id") or "").strip()
+        if issue_claim_ids and claim_id not in issue_claim_ids:
+            continue
+        conclusion_level = str(claim.get("conclusion_level") or "").strip()
+        if conclusion_level not in {"qualified", "not_proven"}:
+            continue
+        statement = str(claim.get("statement") or "").strip()
+        if not statement or _has_limiting_language(statement):
+            continue
+        repaired = _qualified_statement(statement, conclusion_level)
+        claim["statement"] = repaired
+        _replace_statement_in_public_draft(draft, statement, repaired)
+        repaired_count += 1
+    return repaired_count
+
+
+def _has_limiting_language(statement: str) -> bool:
+    normalized = (
+        statement.replace("ë", "e")
+        .replace("Ë", "E")
+        .replace("ç", "c")
+        .replace("Ç", "C")
+    )
+    return bool(LIMITING_LANGUAGE_PATTERN.search(normalized))
+
+
+def _qualified_statement(statement: str, conclusion_level: str) -> str:
+    statement = statement.strip()
+    if conclusion_level == "not_proven":
+        return (
+            "Nga dokumentacioni i administruar nuk provohet plotësisht se "
+            f"{_lower_first(statement)}"
+        )
+    return f"Me rezervë dhe sipas dokumentacionit të administruar, {statement}"
+
+
+def _lower_first(statement: str) -> str:
+    if not statement:
+        return statement
+    return statement[:1].lower() + statement[1:]
+
+
+def _replace_statement_in_public_draft(
+    draft: dict[str, Any],
+    old_statement: str,
+    new_statement: str,
+) -> None:
+    if isinstance(draft.get("executive_summary"), str):
+        draft["executive_summary"] = draft["executive_summary"].replace(
+            old_statement,
+            new_statement,
+        )
+    sections = draft.get("sections")
+    if not isinstance(sections, list):
+        return
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        if isinstance(section.get("body"), str):
+            section["body"] = section["body"].replace(old_statement, new_statement)
 
 
 def _issue_detail(issue: dict[str, Any]) -> str:

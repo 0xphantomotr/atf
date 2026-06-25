@@ -8,6 +8,7 @@ from app.telegram.messages import WELCOME_MESSAGE
 def test_supported_filename() -> None:
     assert is_supported_filename("dosja.pdf")
     assert is_supported_filename("dosja.zip")
+    assert is_supported_filename("Kronologjia.mpp")
     assert not is_supported_filename("script.exe")
 
 
@@ -39,6 +40,7 @@ def test_classifier_handles_common_vkm_610_documents() -> None:
     assert classify_document_type("leje_ndertimi.pdf", "")[0] == "construction_permit"
     assert classify_document_type("libri_i_kantierit.pdf", "")[0] == "site_book"
     assert classify_document_type("akt_kontrolli_0.00.pdf", "")[0] == "level_0_00_control_act"
+    assert classify_document_type("Kronologjia.mpp", "")[0] == "project_schedule"
 
 
 def test_classifier_handles_real_dossier_filenames() -> None:
@@ -70,6 +72,7 @@ def test_classifier_handles_real_dossier_filenames() -> None:
             "construction_permit_conformity_declaration"
         ),
         "deklart mbikqyresi alisha kerpi.docx": "technical_declaration",
+        "Kronologjia.mpp": "project_schedule",
         "X.Akt Kolaudimi.docx": "kolaudim_act",
     }
 
