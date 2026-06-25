@@ -1,6 +1,6 @@
 # Akt Kolaudimi Improvement Roadmap
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 ## Objective
 
@@ -139,10 +139,13 @@ an unsupported conclusion more convincingly.
 - [x] Use a cost-efficient model for document extraction and a stronger reasoning model
   for specialist synthesis, final drafting and correction.
 - [x] Estimate calls and token volume before starting a full-folder analysis.
-- [ ] Enforce provider-specific RPM, TPM and daily-request limits.
-- [ ] Respect provider `Retry-After` values and pause jobs instead of exhausting retries.
-- [ ] Resume quota-limited jobs without repeating completed files or batches.
-- [ ] Expose document-level progress and the next retry time through `/status`.
+- [x] Use conservative model-specific RPM pacing for known Gemini free-tier models and
+  user-configured request limits.
+- [x] Respect provider `Retry-After` values and pause jobs instead of exhausting retries.
+- [x] Resume quota-limited jobs without repeating completed files or batches.
+- [x] Expose document-level progress and the next retry time through `/status`.
+- [ ] Add proactive TPM/RPD budget enforcement before provider calls when exact
+  account limits are known.
 
 ### Reproducibility
 

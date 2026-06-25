@@ -6,6 +6,9 @@ from app.db.session import AsyncSessionLocal
 from app.reviews import service as reviews_service
 from app.telegram.service import (
     display_review_job_error,
+    display_review_job_stage,
+    display_retry_time,
+    document_progress_line,
     get_active_project,
     get_latest_review_job,
     get_or_create_message_user,
@@ -49,9 +52,25 @@ async def status_command(message: Message) -> None:
         f"Statusi: {job.status}",
         f"Progresi: {job.progress}%",
     ]
+    stage_label = display_review_job_stage(job.current_stage)
+    if stage_label:
+        lines.append(f"Faza: {stage_label}")
+    documents_line = document_progress_line(job.progress_details)
+    if documents_line:
+        lines.append(documents_line)
+
     if job.status == "completed":
         lines.append(f"Çështje për verifikim: {findings_count}")
         lines.append("Draft Akt Kolaudimin mund ta merrni me /raportet.")
+    elif job.status == "waiting_for_quota":
+        lines.extend(
+            [
+                "Modeli AI arriti limitin e përkohshëm të kuotës.",
+                f"Riprovohet automatikisht: {display_retry_time(job.retry_after_at)}",
+            ]
+        )
+        if job.retry_reason:
+            lines.append(f"Arsye: {job.retry_reason}")
     elif job.status == "failed":
         lines.append(f"Gabim: {display_review_job_error(job.error_message)}")
     else:

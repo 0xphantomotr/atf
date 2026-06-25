@@ -1,6 +1,7 @@
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram.types import Message, User as TelegramUser
 from fastapi import HTTPException
@@ -8,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.files import service as files_service
 from app.files.parser import is_supported_filename
 from app.projects import service as projects_service
@@ -128,6 +130,52 @@ def display_review_job_error(error_message: str | None) -> str:
             "Ruajeni përsëri me /ai_key provider api_key."
         )
     return error_message or "Gabim i panjohur."
+
+
+def display_review_job_stage(stage: str | None) -> str | None:
+    labels = {
+        "queued": "Në radhë",
+        "starting": "Duke nisur",
+        "loading_project": "Duke lexuar projektin",
+        "document_analysis": "Analiza e dokumenteve",
+        "document_analysis_complete": "Analiza e dokumenteve përfundoi",
+        "rules_and_findings": "Kontrolli ligjor/deterministik",
+        "draft_generation": "Hartimi i Akt-Kolaudimit",
+        "rendering": "Përgatitja e PDF",
+        "completed": "Përfunduar",
+        "failed": "Dështoi",
+    }
+    if not stage:
+        return None
+    return labels.get(stage, stage)
+
+
+def display_retry_time(value) -> str:
+    if value is None:
+        return "pas pak"
+    try:
+        timezone_info = ZoneInfo(settings.app_timezone)
+    except ZoneInfoNotFoundError:
+        timezone_info = ZoneInfo("Europe/Tirane")
+    return value.astimezone(timezone_info).strftime("%d.%m.%Y %H:%M")
+
+
+def document_progress_line(progress_details: dict | None) -> str | None:
+    if not isinstance(progress_details, dict):
+        return None
+    documents = progress_details.get("documents")
+    if not isinstance(documents, dict):
+        return None
+    total = int(documents.get("total") or 0)
+    if total <= 0:
+        return None
+    analyzed = int(documents.get("analyzed") or 0)
+    processed = int(documents.get("processed") or 0)
+    current_filename = documents.get("current_filename")
+    line = f"Dokumente: {analyzed}/{total} të analizuara, {processed}/{total} të kaluara"
+    if isinstance(current_filename, str) and current_filename:
+        line = f"{line}\nAktualisht: {current_filename[:120]}"
+    return line
 
 
 async def _get_telegram_account_for_user(

@@ -6,6 +6,7 @@ from app.db.session import AsyncSessionLocal
 from app.reviews import service as reviews_service
 from app.telegram.service import (
     display_review_job_error,
+    display_retry_time,
     get_active_project,
     get_latest_review_job,
     get_or_create_message_user,
@@ -40,6 +41,16 @@ async def reports_command(message: Message) -> None:
                 "Gjenerimi i fundit dështoi dhe nuk prodhoi Akt Kolaudimi.\n\n"
                 f"Gabim: {display_review_job_error(latest_job.error_message)}\n\n"
                 "Rregulloni konfigurimin dhe përdorni përsëri /gjenero."
+            )
+            return
+
+        if latest_job.status == "waiting_for_quota":
+            await message.answer(
+                "Akt Kolaudimi nuk është ende gati.\n\n"
+                "Modeli AI arriti limitin e përkohshëm të kuotës dhe gjenerimi "
+                "do të vazhdojë automatikisht nga hapi i fundit i ruajtur.\n\n"
+                f"Riprovohet: {display_retry_time(latest_job.retry_after_at)}\n"
+                "Përdorni /status për ecurinë."
             )
             return
 

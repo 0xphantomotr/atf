@@ -3,6 +3,7 @@ from collections import Counter
 from typing import Any
 
 from app.agents.llm import (
+    AIQuotaLimitError,
     LLMReviewError,
     request_specialist_review,
     specialist_review_input_token_budget,
@@ -115,6 +116,8 @@ def review_specialist_domains(state: AuditGraphState) -> AuditGraphState:
 
     try:
         response = request_specialist_review(review_input, ai_settings=ai_settings)
+    except AIQuotaLimitError:
+        raise
     except LLMReviewError as exc:
         memoranda = _base_memoranda(review_input)
         state["specialist_reviews"] = {

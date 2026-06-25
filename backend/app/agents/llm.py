@@ -1,5 +1,9 @@
 import json
+import math
+import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib import error, request
 
@@ -15,6 +19,23 @@ from app.core.config import settings
 
 class LLMReviewError(RuntimeError):
     pass
+
+
+class AIQuotaLimitError(LLMReviewError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        model: str,
+        status_code: int | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 MODEL_REQUEST_TOKEN_LIMITS: dict[tuple[str, str], int] = {
@@ -904,6 +925,27 @@ def _post_json(
                 data = response.read().decode("utf-8")
             break
         except error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            quota_retry_after = _quota_retry_after_seconds(exc, details)
+            if _is_quota_limit_response(exc.code, details, quota_retry_after):
+                provider = str(ai_settings.get("provider") or provider_label)
+                model = str(ai_settings.get("model") or body.get("model") or "")
+                retry_fragment = (
+                    f" Provohet përsëri pas {quota_retry_after} sekondash."
+                    if quota_retry_after
+                    else ""
+                )
+                raise AIQuotaLimitError(
+                    (
+                        f"{provider_label} arriti limitin e përkohshëm të AI "
+                        f"({exc.code}).{retry_fragment}"
+                    ),
+                    provider=provider,
+                    model=model,
+                    status_code=exc.code,
+                    retry_after_seconds=quota_retry_after,
+                ) from exc
+
             if exc.code in TRANSIENT_HTTP_STATUS_CODES and attempt + 1 < attempts:
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 try:
@@ -912,7 +954,6 @@ def _post_json(
                     delay = 2
                 time.sleep(delay)
                 continue
-            details = exc.read().decode("utf-8", errors="replace")
             raise LLMReviewError(
                 f"{provider_label} API request failed: {exc.code} {details[:500]}"
             ) from exc
@@ -934,6 +975,69 @@ def _post_json(
     if not isinstance(parsed, dict):
         raise LLMReviewError("OpenAI API returned a non-object response.")
     return parsed
+
+
+def _is_quota_limit_response(
+    status_code: int,
+    details: str,
+    retry_after_seconds: int | None,
+) -> bool:
+    if status_code == 429:
+        return True
+    if status_code not in {403, 413}:
+        return False
+
+    lowered = details.lower()
+    markers = (
+        "quota",
+        "resource_exhausted",
+        "rate_limit",
+        "rate limit",
+        "requests per minute",
+        "requests per day",
+        "retry in",
+    )
+    return retry_after_seconds is not None and any(marker in lowered for marker in markers)
+
+
+def _quota_retry_after_seconds(
+    exc: error.HTTPError,
+    details: str,
+) -> int | None:
+    header = exc.headers.get("Retry-After") if exc.headers else None
+    return (
+        _parse_retry_after_header(header)
+        or _parse_retry_after_text(details)
+        or (60 if exc.code == 429 else None)
+    )
+
+
+def _parse_retry_after_header(value: str | None) -> int | None:
+    if not value:
+        return None
+    clean_value = value.strip()
+    if not clean_value:
+        return None
+    try:
+        return max(1, math.ceil(float(clean_value)))
+    except ValueError:
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(clean_value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    return max(1, math.ceil(seconds))
+
+
+def _parse_retry_after_text(details: str) -> int | None:
+    match = re.search(r"retry\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*s", details, re.IGNORECASE)
+    if match is None:
+        return None
+    return max(1, math.ceil(float(match.group(1))))
 
 
 def _extract_chat_completion_content(payload: dict[str, Any]) -> str:

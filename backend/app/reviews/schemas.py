@@ -24,6 +24,12 @@ class ReviewJobRead(BaseModel):
     output_format: str
     progress: int
     execution_plan: dict
+    current_stage: str | None = None
+    progress_details: dict = Field(default_factory=dict)
+    retry_after_at: datetime | None = None
+    retry_reason: str | None = None
+    retry_count: int = 0
+    error_message: str | None = None
 
 
 class GenerationPreflightRead(BaseModel):

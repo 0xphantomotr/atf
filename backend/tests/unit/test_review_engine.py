@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from app.agents.llm import AIQuotaLimitError
 from app.core.config import settings
 from app.reports.renderer import render_audit_report_html
 from app.reviews.service import (
@@ -14,6 +15,7 @@ from app.reviews.service import (
     _json_output_bytes,
     _output_metadata,
     _output_types_for_format,
+    _quota_error_from_exception,
     _report_output_basename,
     _required_document_types,
     _rule_applies_to_project,
@@ -255,6 +257,25 @@ def test_kolaudim_report_date_uses_configured_local_timezone(monkeypatch) -> Non
 def test_output_types_include_json_before_pdf() -> None:
     assert _output_types_for_format("json") == ("json",)
     assert _output_types_for_format("pdf") == ("json", "pdf")
+
+
+def test_quota_error_is_found_through_wrapped_exception() -> None:
+    quota = AIQuotaLimitError(
+        "quota",
+        provider="gemini",
+        model="gemini-2.5-flash",
+        status_code=429,
+        retry_after_seconds=37,
+    )
+    try:
+        try:
+            raise quota
+        except AIQuotaLimitError as exc:
+            raise RuntimeError("wrapped") from exc
+    except RuntimeError as wrapped:
+        found = _quota_error_from_exception(wrapped)
+
+    assert found is quota
 
 
 def test_kolaudim_output_basename_is_clean() -> None:

@@ -1,4 +1,4 @@
-from app.agents.llm import LLMReviewError, request_senior_review
+from app.agents.llm import AIQuotaLimitError, LLMReviewError, request_senior_review
 from app.agents.state import AuditGraphState
 from app.ai.stages import ai_settings_for_stage
 from app.core.config import settings
@@ -49,6 +49,8 @@ def senior_review(state: AuditGraphState) -> AuditGraphState:
 
     try:
         review = request_senior_review(_build_review_input(state), ai_settings=ai_settings)
+    except AIQuotaLimitError:
+        raise
     except LLMReviewError as exc:
         state["ai_review"] = {
             "status": "failed",

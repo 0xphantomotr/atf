@@ -2,7 +2,7 @@ import json
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any
 
@@ -11,6 +11,7 @@ from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import service as ai_service
+from app.agents.llm import AIQuotaLimitError
 from app.agents.graph import run_audit_graph
 from app.agents.state import AuditGraphState
 from app.core.config import settings
@@ -39,6 +40,9 @@ SUPPORTED_OUTPUT_FORMATS = {"json", "pdf"}
 JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 PDF_CONTENT_TYPE = "application/pdf"
 AGENT_TEXT_EXCERPT_LIMIT = 20_000
+QUOTA_WAITING_STATUS = "waiting_for_quota"
+DEFAULT_QUOTA_RETRY_SECONDS = 15 * 60
+MAX_QUOTA_RETRY_SECONDS = 24 * 60 * 60
 
 DOCUMENT_TYPE_ALIASES = {
     "foundation_completion_and_level_0_00_control_act": {"level_0_00_control_act"},
@@ -186,6 +190,9 @@ async def create_review_job(
         },
         execution_plan=execution_plan,
         progress=0,
+        current_stage="queued",
+        progress_details={},
+        retry_count=0,
     )
     session.add(job)
     await session.commit()
@@ -245,14 +252,37 @@ async def run_queued_review_job(
         )
     if job.status == "completed":
         return job
+    now = datetime.now(timezone.utc)
+    if (
+        job.status == QUOTA_WAITING_STATUS
+        and job.retry_after_at is not None
+        and job.retry_after_at > now
+    ):
+        return job
 
     job.status = "running"
-    job.progress = 10
+    job.progress = max(job.progress, 10)
     job.error_message = None
-    job.started_at = datetime.now(timezone.utc)
-    await session.flush()
+    job.retry_after_at = None
+    job.retry_reason = None
+    job.completed_at = None
+    job.current_stage = "starting"
+    job.progress_details = {
+        **dict(job.progress_details or {}),
+        "stage": "starting",
+    }
+    if job.started_at is None:
+        job.started_at = now
+    await session.commit()
 
     try:
+        await _set_job_progress(
+            session,
+            job,
+            progress=max(job.progress, 10),
+            stage="loading_project",
+            details={"stage": "loading_project"},
+        )
         project = await _get_project_for_user(
             session,
             project_id=job.project_id,
@@ -275,20 +305,57 @@ async def run_queued_review_job(
 
         document_analyses: list[dict[str, Any]] = []
         if _job_requires_ai_review(job) and ai_settings is not None:
-            job.progress = 15
+            await _set_job_progress(
+                session,
+                job,
+                progress=max(job.progress, 15),
+                stage="document_analysis",
+                details={"stage": "document_analysis"},
+            )
+
+            async def update_document_progress(details: dict[str, Any]) -> None:
+                documents = dict(details.get("documents", {}))
+                total = int(documents.get("total") or 0)
+                processed = int(documents.get("processed") or 0)
+                if total > 0:
+                    analysis_progress = 15 + round(35 * min(processed, total) / total)
+                else:
+                    analysis_progress = 15
+                await _set_job_progress(
+                    session,
+                    job,
+                    progress=max(job.progress, analysis_progress),
+                    stage="document_analysis",
+                    details=details,
+                )
+
             analysis_runs = await ensure_project_document_analyses(
                 session,
                 project_id=project.id,
                 requested_by=job.requested_by,
                 ai_settings=ai_settings,
+                progress_callback=update_document_progress,
             )
             document_analyses = await analysis_run_payloads(session, runs=analysis_runs)
-            job.progress = 50
+            await _set_job_progress(
+                session,
+                job,
+                progress=max(job.progress, 50),
+                stage="document_analysis_complete",
+                details={"stage": "document_analysis_complete"},
+            )
             current_files = await _load_current_file_snapshots(
                 session,
                 project_id=project.id,
             )
 
+        await _set_job_progress(
+            session,
+            job,
+            progress=max(job.progress, 55),
+            stage="rules_and_findings",
+            details={"stage": "rules_and_findings"},
+        )
         await _clear_review_job_results(session, job_id=job.id)
         findings = _build_missing_document_findings(
             job=job,
@@ -300,6 +367,13 @@ async def run_queued_review_job(
             session.add(finding)
         await session.flush()
 
+        await _set_job_progress(
+            session,
+            job,
+            progress=max(job.progress, 65),
+            stage="draft_generation",
+            details={"stage": "draft_generation"},
+        )
         agent_state = _run_phase_one_audit_graph(
             project=project,
             job=job,
@@ -311,7 +385,13 @@ async def run_queued_review_job(
             require_ai_review=_job_requires_ai_review(job),
         )
 
-        job.progress = 70
+        await _set_job_progress(
+            session,
+            job,
+            progress=max(job.progress, 80),
+            stage="rendering",
+            details={"stage": "rendering"},
+        )
         report = _build_audit_report(
             project=project,
             job=job,
@@ -324,14 +404,34 @@ async def run_queued_review_job(
 
         job.status = "completed"
         job.progress = 100
+        job.current_stage = "completed"
+        job.progress_details = {
+            **dict(job.progress_details or {}),
+            "stage": "completed",
+        }
+        job.retry_after_at = None
+        job.retry_reason = None
         job.completed_at = datetime.now(timezone.utc)
         await session.commit()
     except Exception as exc:
+        quota_error = _quota_error_from_exception(exc)
+        if quota_error is not None:
+            await session.rollback()
+            job = await _pause_review_job_for_quota(
+                session,
+                job_id=job_id,
+                quota_error=quota_error,
+                original_error=exc,
+            )
+            _schedule_review_job_retry(job)
+            return job
+
         await session.rollback()
         job = await session.get(ReviewJob, job_id)
         if job is not None:
             job.status = "failed"
             job.progress = 100
+            job.current_stage = "failed"
             job.error_message = str(exc)
             job.completed_at = datetime.now(timezone.utc)
             await session.commit()
@@ -339,6 +439,103 @@ async def run_queued_review_job(
 
     await session.refresh(job)
     return job
+
+
+async def _set_job_progress(
+    session: AsyncSession,
+    job: ReviewJob,
+    *,
+    progress: int,
+    stage: str,
+    details: dict[str, Any],
+) -> None:
+    job.status = "running"
+    job.progress = max(0, min(99, progress))
+    job.current_stage = stage
+    job.progress_details = {
+        **dict(job.progress_details or {}),
+        **details,
+        "stage": stage,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await session.commit()
+
+
+async def _pause_review_job_for_quota(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    quota_error: AIQuotaLimitError,
+    original_error: Exception,
+) -> ReviewJob:
+    job = await session.get(ReviewJob, job_id)
+    if job is None:
+        raise original_error
+
+    now = datetime.now(timezone.utc)
+    retry_after_seconds = max(
+        1,
+        min(
+            MAX_QUOTA_RETRY_SECONDS,
+            quota_error.retry_after_seconds or DEFAULT_QUOTA_RETRY_SECONDS,
+        ),
+    )
+    retry_after_at = now + timedelta(seconds=retry_after_seconds)
+    retry_reason = _quota_retry_reason(quota_error)
+
+    job.status = QUOTA_WAITING_STATUS
+    job.progress = max(1, min(job.progress, 99))
+    job.current_stage = job.current_stage or "waiting_for_quota"
+    job.retry_after_at = retry_after_at
+    job.retry_reason = retry_reason
+    job.retry_count = int(job.retry_count or 0) + 1
+    job.error_message = retry_reason
+    job.completed_at = None
+    job.progress_details = {
+        **dict(job.progress_details or {}),
+        "stage": job.current_stage,
+        "waiting_for_quota": True,
+        "retry_after_at": retry_after_at.isoformat(),
+        "retry_after_seconds": retry_after_seconds,
+        "retry_reason": retry_reason,
+        "provider": quota_error.provider,
+        "model": quota_error.model,
+        "status_code": quota_error.status_code,
+        "updated_at": now.isoformat(),
+    }
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+def _quota_retry_reason(quota_error: AIQuotaLimitError) -> str:
+    provider = quota_error.provider or "AI"
+    model = quota_error.model or "model"
+    return (
+        f"{provider} model {model} arriti limitin e përkohshëm të kuotës/API. "
+        "Gjenerimi do të vazhdojë automatikisht nga hapi i fundit i ruajtur."
+    )
+
+
+def _quota_error_from_exception(exc: BaseException) -> AIQuotaLimitError | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, AIQuotaLimitError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _schedule_review_job_retry(job: ReviewJob) -> None:
+    if job.retry_after_at is None:
+        return
+    now = datetime.now(timezone.utc)
+    delay_ms = max(0, int((job.retry_after_at - now).total_seconds() * 1000))
+    from app.workers.jobs import run_review_job
+
+    run_review_job.send_with_options(args=(str(job.id),), delay=delay_ms)
 
 
 async def get_review_job(

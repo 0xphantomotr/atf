@@ -51,6 +51,17 @@ def test_provider_pacer_uses_configured_request_limit() -> None:
     assert pacer.interval_seconds == 3.1
 
 
+def test_provider_pacer_uses_model_specific_free_tier_limit() -> None:
+    pacer = ProviderRequestPacer(
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+        }
+    )
+
+    assert pacer.interval_seconds == 12.1
+
+
 def test_analysis_cache_key_changes_for_file_or_model() -> None:
     file_version = FileVersion(
         id=uuid.uuid4(),

@@ -3,6 +3,7 @@ from io import BytesIO
 from urllib import error
 
 from app.agents.llm import (
+    AIQuotaLimitError,
     _parse_model_json_object,
     _post_json,
     _response_format,
@@ -93,6 +94,45 @@ def test_post_json_retries_transient_provider_error(monkeypatch) -> None:
     )
 
     assert attempts == 3
+
+
+def test_post_json_raises_quota_error_with_retry_after(monkeypatch) -> None:
+    attempts = 0
+
+    def fake_urlopen(api_request, timeout):
+        nonlocal attempts
+        attempts += 1
+        raise error.HTTPError(
+            api_request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "37"},
+            BytesIO(b'{"error":{"message":"quota exceeded"}}'),
+        )
+
+    monkeypatch.setattr("app.agents.llm.request.urlopen", fake_urlopen)
+
+    try:
+        _post_json(
+            "/chat/completions",
+            {"model": "gemini-2.5-flash"},
+            ai_settings={
+                "base_url": "https://example.invalid/v1",
+                "api_key": "test",
+                "provider": "gemini",
+                "model": "gemini-2.5-flash",
+            },
+            retry_transient=True,
+        )
+    except AIQuotaLimitError as exc:
+        assert exc.provider == "gemini"
+        assert exc.model == "gemini-2.5-flash"
+        assert exc.status_code == 429
+        assert exc.retry_after_seconds == 37
+    else:
+        raise AssertionError("Expected quota error.")
+
+    assert attempts == 1
 
 
 def test_response_format_uses_json_object_for_groq() -> None:

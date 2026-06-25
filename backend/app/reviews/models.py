@@ -21,7 +21,14 @@ class ReviewJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     law_scope: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     execution_plan: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    current_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    progress_details: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_after_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retry_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

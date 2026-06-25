@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -11,6 +12,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.llm import (
+    AIQuotaLimitError,
     document_analysis_max_output_tokens,
     model_request_token_limit,
     request_document_analysis,
@@ -32,10 +34,18 @@ PROMPT_OVERHEAD_TOKENS = 1_600
 CHARS_PER_TOKEN = 4
 MAX_BATCH_INPUT_TOKENS = 16_000
 DEFAULT_PROVIDER_REQUESTS_PER_MINUTE = {
-    "gemini": 15,
+    "gemini": 5,
     "groq": 30,
     "openai": 60,
 }
+DEFAULT_MODEL_REQUESTS_PER_MINUTE = {
+    ("gemini", "gemini-2.5-flash"): 5,
+    ("gemini", "gemini-2.5-flash-lite"): 10,
+    ("gemini", "gemini-3-flash"): 5,
+    ("gemini", "gemini-3.1-flash-lite"): 15,
+    ("gemini", "gemini-3.5-flash"): 5,
+}
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class DocumentAnalysisError(RuntimeError):
@@ -49,7 +59,11 @@ class ProviderRequestPacer:
             requests_per_minute = configured_rpm
         else:
             provider = str(ai_settings.get("provider") or "").lower()
-            requests_per_minute = DEFAULT_PROVIDER_REQUESTS_PER_MINUTE.get(provider, 30)
+            model = str(ai_settings.get("model") or "")
+            requests_per_minute = DEFAULT_MODEL_REQUESTS_PER_MINUTE.get(
+                (provider, model),
+                DEFAULT_PROVIDER_REQUESTS_PER_MINUTE.get(provider, 30),
+            )
         self.interval_seconds = (60 / requests_per_minute) + 0.1
         self.last_request_started: float | None = None
 
@@ -176,6 +190,25 @@ async def analyze_file_version(
                 ai_settings=ai_settings,
             )
             normalized_result = _normalize_batch_result(result, allowed_chunks=batch_chunks)
+        except AIQuotaLimitError as exc:
+            await session.rollback()
+            persisted = await session.get(DocumentAnalysisBatch, batch_record_id)
+            run = await session.get(DocumentAnalysisRun, run_id)
+            if persisted is not None:
+                persisted.status = "waiting_for_quota"
+                persisted.error_message = str(exc)
+                persisted.completed_at = datetime.now(timezone.utc)
+            if run is not None:
+                run.status = "waiting_for_quota"
+                run.error_message = str(exc)
+                run.completed_batch_count = len(completed_results)
+                run.token_usage = _sum_token_usage(completed_usages)
+                run.completed_at = datetime.now(timezone.utc)
+            await session.commit()
+            raise DocumentAnalysisError(
+                f"Analiza e dokumentit {file_version.original_filename} u ndalua "
+                f"përkohësisht në grupin {batch_index + 1}/{len(batches)}: {exc}"
+            ) from exc
         except Exception as exc:
             await session.rollback()
             persisted = await session.get(DocumentAnalysisBatch, batch_record_id)
@@ -247,6 +280,7 @@ async def ensure_project_document_analyses(
     project_id: uuid.UUID,
     requested_by: uuid.UUID,
     ai_settings: dict[str, Any],
+    progress_callback: ProgressCallback | None = None,
 ) -> list[DocumentAnalysisRun]:
     ai_settings = ai_settings_for_stage(ai_settings, "extraction")
     result = await session.execute(
@@ -260,17 +294,58 @@ async def ensure_project_document_analyses(
         .order_by(ProjectFile.created_at, FileVersion.version_number)
     )
 
+    file_versions = list(result.scalars())
     analyses: list[DocumentAnalysisRun] = []
     request_pacer = ProviderRequestPacer(ai_settings)
-    for file_version in result.scalars():
+    total_files = len(file_versions)
+    if progress_callback is not None:
+        await progress_callback(
+            {
+                "stage": "document_analysis",
+                "documents": {
+                    "total": total_files,
+                    "processed": 0,
+                    "analyzed": 0,
+                    "current_filename": None,
+                },
+            }
+        )
+
+    async def report_progress(
+        *,
+        processed: int,
+        current_filename: str | None,
+    ) -> None:
+        if progress_callback is None:
+            return
+        await progress_callback(
+            {
+                "stage": "document_analysis",
+                "documents": {
+                    "total": total_files,
+                    "processed": processed,
+                    "analyzed": len(analyses),
+                    "current_filename": current_filename,
+                },
+            }
+        )
+
+    for processed_count, file_version in enumerate(file_versions, start=1):
+        if progress_callback is not None:
+            await report_progress(
+                processed=processed_count - 1,
+                current_filename=file_version.original_filename,
+            )
         if is_parsed_status(file_version.parse_status):
             chunk_count = await _chunk_count(session, file_version_id=file_version.id)
             if chunk_count == 0:
                 await parse_file_version(session, file_version_id=file_version.id)
                 await session.refresh(file_version)
         if not is_parsed_status(file_version.parse_status):
+            await report_progress(processed=processed_count, current_filename=None)
             continue
         if await _chunk_count(session, file_version_id=file_version.id) == 0:
+            await report_progress(processed=processed_count, current_filename=None)
             continue
         analyses.append(
             await analyze_file_version(
@@ -281,6 +356,7 @@ async def ensure_project_document_analyses(
                 request_pacer=request_pacer,
             )
         )
+        await report_progress(processed=processed_count, current_filename=None)
     return analyses
 
 
@@ -521,7 +597,7 @@ async def _load_resumable_run(
         select(DocumentAnalysisRun)
         .where(
             DocumentAnalysisRun.cache_key == cache_key,
-            DocumentAnalysisRun.status.in_(("running", "failed")),
+            DocumentAnalysisRun.status.in_(("running", "failed", "waiting_for_quota")),
         )
         .order_by(DocumentAnalysisRun.created_at.desc())
         .limit(1)

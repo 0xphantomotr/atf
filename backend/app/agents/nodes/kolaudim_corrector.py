@@ -3,7 +3,7 @@ import re
 from typing import Any, Literal
 
 from app.agents.claim_grounding import build_claim_evidence_catalog
-from app.agents.llm import LLMReviewError, request_kolaudim_correction
+from app.agents.llm import AIQuotaLimitError, LLMReviewError, request_kolaudim_correction
 from app.agents.nodes.kolaudim_writer import _normalize_kolaudim_draft
 from app.agents.state import AuditGraphState
 from app.ai.stages import ai_settings_for_stage
@@ -93,6 +93,8 @@ def correct_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
             correction_input,
             ai_settings=ai_settings,
         )
+    except AIQuotaLimitError:
+        raise
     except LLMReviewError as exc:
         state["kolaudim_correction"] = {
             "status": "failed",

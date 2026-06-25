@@ -71,6 +71,8 @@ async def generate_kolaudim_act(message: Message) -> None:
         f"Statusi: {job.status}\n\n"
         f"Thirrje AI (maksimum): {totals.get('estimated_calls', 0)}\n"
         f"Tokena (maksimum i vlerësuar): {totals.get('estimated_max_tokens', 0):,}\n\n"
+        "Nëse provider-i arrin limitin falas/API, procesi ndalon përkohësisht "
+        "dhe vazhdon automatikisht pa përsëritur dokumentet e përfunduara.\n\n"
         "Përdorni /status për ecurinë dhe /raportet kur të përfundojë."
     )
 
