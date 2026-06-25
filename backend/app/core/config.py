@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_env: str = "local"
     app_base_url: str = "http://localhost:8000"
     app_name: str = "Auditimi Teknik Bot"
+    app_timezone: str = "Europe/Tirane"
     log_level: str = "INFO"
 
     database_url: str = "postgresql+asyncpg://atf:atf@localhost:5432/atf"

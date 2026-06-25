@@ -109,7 +109,7 @@
     {% if is_kolaudim %}
     <h1>{{ report.title }}</h1>
     <p class="document-date">
-      Hartuar më {{ report.generated_at.strftime("%d.%m.%Y") }}
+      Hartuar më {{ report.generated_at|local_report_date }}
     </p>
 
     <table>

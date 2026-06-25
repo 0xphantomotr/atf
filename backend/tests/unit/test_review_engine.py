@@ -1,7 +1,9 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from app.core.config import settings
 from app.reports.renderer import render_audit_report_html
 from app.reviews.service import (
     CurrentFileSnapshot,
@@ -237,6 +239,17 @@ def test_audit_report_compacts_historical_files_checked_evidence() -> None:
     assert report.document_summary.unknown_files == 1
     assert report.findings[0].evidence["files_checked_count"] == 2
     assert "files_checked" not in report.findings[0].evidence
+
+
+def test_kolaudim_report_date_uses_configured_local_timezone(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "app_timezone", "Europe/Tirane")
+    report = _sample_kolaudim_report()
+    report.generated_at = datetime(2026, 6, 24, 22, 11, tzinfo=timezone.utc)
+
+    html = render_audit_report_html(report)
+
+    assert "Hartuar më 25.06.2026" in html
+    assert "Hartuar më 24.06.2026" not in html
 
 
 def test_output_types_include_json_before_pdf() -> None:
