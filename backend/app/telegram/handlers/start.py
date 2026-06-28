@@ -47,5 +47,6 @@ def _help_text() -> str:
         "/kolaudim ose /akt - alias për /gjenero\n"
         "/status - kontrollon statusin e gjenerimit\n"
         "/raportet - dërgon Draft Akt Kolaudimin PDF të fundit\n\n"
+        "/prompt kërkesa - menaxhon projektet me gjuhë natyrore\n\n"
         "Projekti aktiv është projekti më i fundit i krijuar."
     )

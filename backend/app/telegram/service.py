@@ -73,6 +73,7 @@ async def set_active_project(
     *,
     user_id: UUID,
     project_id: UUID,
+    commit: bool = True,
 ) -> Project:
     project = await projects_service.get_project(
         session,
@@ -82,7 +83,8 @@ async def set_active_project(
     account = await _get_telegram_account_for_user(session, user_id=user_id)
     if account is not None:
         account.active_project_id = project.id
-        await session.commit()
+        if commit:
+            await session.commit()
     return project
 
 

@@ -8,6 +8,7 @@ from app.document_analysis.models import (
 from app.files.models import DocumentChunk, FileVersion, ParsedDocument, ProjectFile
 from app.laws.models import LawArticle, LawChunk, LawDocument
 from app.notifications.models import Notification
+from app.prompting.models import PromptRun, PromptRunStep
 from app.projects.models import Project, ProjectMember
 from app.reviews.models import GeneratedOutput, ReviewFinding, ReviewJob
 from app.rules.models import Rule
@@ -29,6 +30,8 @@ __all__ = [
     "Project",
     "ProjectFile",
     "ProjectMember",
+    "PromptRun",
+    "PromptRunStep",
     "ReviewFinding",
     "ReviewJob",
     "Rule",

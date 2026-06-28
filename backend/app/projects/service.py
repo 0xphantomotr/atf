@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -9,7 +9,13 @@ from app.projects.models import Project, ProjectMember
 from app.projects.schemas import ProjectCreate, ProjectUpdate
 
 
-async def create_project(session: AsyncSession, *, payload: ProjectCreate, user_id: UUID) -> Project:
+async def create_project(
+    session: AsyncSession,
+    *,
+    payload: ProjectCreate,
+    user_id: UUID,
+    commit: bool = True,
+) -> Project:
     project = Project(
         name=payload.name,
         project_type=payload.project_type,
@@ -23,8 +29,9 @@ async def create_project(session: AsyncSession, *, payload: ProjectCreate, user_
     await session.flush()
 
     session.add(ProjectMember(project_id=project.id, user_id=user_id, role="owner"))
-    await session.commit()
-    await session.refresh(project)
+    if commit:
+        await session.commit()
+        await session.refresh(project)
     return project
 
 
@@ -80,5 +87,5 @@ async def update_project(
 
 async def delete_project(session: AsyncSession, *, project_id: UUID, user_id: UUID) -> None:
     project = await get_project(session, project_id=project_id, user_id=user_id)
-    project.deleted_at = datetime.now(UTC)
+    project.deleted_at = datetime.now(timezone.utc)
     await session.commit()

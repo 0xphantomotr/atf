@@ -38,5 +38,9 @@ async def telegram_webhook(
     bot = get_telegram_bot()
     dispatcher = get_telegram_dispatcher()
     update = Update.model_validate(await request.json(), context={"bot": bot})
-    await dispatcher.feed_update(bot, update)
+    await dispatcher.feed_update(
+        bot,
+        update,
+        telegram_update_id=update.update_id,
+    )
     return JSONResponse({"ok": True})

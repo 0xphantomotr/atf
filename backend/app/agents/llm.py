@@ -346,6 +346,45 @@ KOLAUDIM_DRAFT_SCHEMA: dict[str, Any] = {
 }
 
 
+def request_structured_completion(
+    *,
+    system_prompt: str,
+    user_content: str,
+    schema_name: str,
+    schema: dict[str, Any],
+    ai_settings: dict[str, Any],
+    max_output_tokens: int = 1_200,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    body: dict[str, Any] = {
+        "model": ai_settings["model"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "response_format": _schema_response_format(
+            ai_settings,
+            schema_name=schema_name,
+            schema=schema,
+        ),
+        "temperature": 0,
+        "max_tokens": min(max_output_tokens, model_output_token_limit(ai_settings)),
+    }
+    reasoning_effort = document_analysis_reasoning_effort(ai_settings)
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
+
+    response_payload = _post_json(
+        "/chat/completions",
+        body,
+        ai_settings=ai_settings,
+        timeout_seconds=max(int(settings.openai_timeout_seconds), 60),
+        retry_transient=True,
+    )
+    text = _extract_chat_completion_content(response_payload)
+    parsed = _parse_model_json_object(text, error_label="AI prompt planner")
+    return parsed, _extract_token_usage(response_payload)
+
+
 def request_senior_review(
     review_input: dict[str, Any],
     *,

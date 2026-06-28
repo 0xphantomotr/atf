@@ -18,6 +18,7 @@ from app.agents.llm import (
     request_document_analysis,
     request_senior_review,
     request_specialist_review,
+    request_structured_completion,
     specialist_review_input_token_budget,
     specialist_review_max_output_tokens,
 )
@@ -151,6 +152,52 @@ def test_response_format_uses_strict_schema_for_other_providers() -> None:
 
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
+
+
+def test_request_structured_completion_uses_bounded_schema_call(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post_json(path, body, *, ai_settings, **kwargs):
+        captured["path"] = path
+        captured["body"] = body
+        captured["kwargs"] = kwargs
+        return {
+            "choices": [{"message": {"content": '{"status":"ok"}'}}],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 5,
+                "total_tokens": 25,
+            },
+        }
+
+    monkeypatch.setattr("app.agents.llm._post_json", fake_post_json)
+
+    payload, usage = request_structured_completion(
+        system_prompt="Plan safely.",
+        user_content="List projects.",
+        schema_name="test_plan",
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["status"],
+            "properties": {"status": {"type": "string"}},
+        },
+        ai_settings={
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "secret",
+        },
+        max_output_tokens=800,
+    )
+
+    assert captured["path"] == "/chat/completions"
+    assert captured["body"]["max_tokens"] == 800
+    assert captured["body"]["reasoning_effort"] == "none"
+    assert captured["body"]["response_format"]["json_schema"]["name"] == "test_plan"
+    assert captured["kwargs"]["retry_transient"] is True
+    assert payload == {"status": "ok"}
+    assert usage["total_tokens"] == 25
 
 
 def test_request_senior_review_adds_output_shape_to_prompt(monkeypatch) -> None:
