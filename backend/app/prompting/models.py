@@ -59,6 +59,11 @@ class PromptRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    worker_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

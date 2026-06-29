@@ -19,6 +19,7 @@ Allowed actions in this release:
 - select_project: select one existing project by its exact displayed name.
 - show_active_project: show the active project.
 - get_status: show the latest review-job status for the active project.
+- import_attachment: import the attached document or ZIP into the selected project.
 
 Rules:
 - Return only JSON matching the supplied schema.
@@ -33,6 +34,13 @@ Rules:
 - Do not create a project unless the user explicitly asks to create one.
 - Do not select a project unless the user explicitly asks to select/use it, except that a
   newly created project may be selected when the same request asks to use it.
+- Use import_attachment exactly once and as the final action when context.has_attachment
+  is true and the user asks to upload, import, process, or analyze the attached dossier.
+- Set arguments.name to null for import_attachment and every action except create_project
+  and select_project.
+- Never use import_attachment when context.has_attachment is false.
+- Generation and dossier Q&A are not available in this release. Ask for clarification
+  instead of inventing generation or Q&A actions.
 """.strip()
 
 
@@ -113,6 +121,23 @@ def _apply_server_owned_fields(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(payload)
     normalized["version"] = PROMPT_PLAN_VERSION
     normalized["language"] = "sq-AL"
+    actions = normalized.get("actions")
+    if isinstance(actions, list):
+        normalized_actions: list[Any] = []
+        for value in actions:
+            if not isinstance(value, dict):
+                normalized_actions.append(value)
+                continue
+            action = dict(value)
+            if action.get("type") not in {"create_project", "select_project"}:
+                arguments = action.get("arguments")
+                normalized_arguments = (
+                    dict(arguments) if isinstance(arguments, dict) else {}
+                )
+                normalized_arguments["name"] = None
+                action["arguments"] = normalized_arguments
+            normalized_actions.append(action)
+        normalized["actions"] = normalized_actions
     return normalized
 
 

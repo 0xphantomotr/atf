@@ -11,7 +11,7 @@ from typing import BinaryIO
 
 from fastapi import HTTPException, UploadFile, status
 from minio.error import S3Error
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -269,6 +269,7 @@ async def import_project_files_zip(
     project_id: uuid.UUID,
     upload: UploadFile,
     user_id: uuid.UUID,
+    deduplicate: bool = False,
 ) -> tuple[list[tuple[ProjectFile, FileVersion]], list[dict[str, str]]]:
     await get_project(session, project_id=project_id, user_id=user_id)
 
@@ -324,6 +325,22 @@ async def import_project_files_zip(
                         info,
                     )
                     try:
+                        if deduplicate:
+                            existing = await find_current_file_version_by_identity(
+                                session,
+                                project_id=project_id,
+                                original_filename=safe_filename,
+                                sha256_hash=sha256_hash,
+                            )
+                            if existing is not None:
+                                skipped.append(
+                                    {
+                                        "filename": safe_filename,
+                                        "reason": "already imported",
+                                        "file_version_id": str(existing.id),
+                                    }
+                                )
+                                continue
                         uploaded.append(
                             await _create_project_file_from_data(
                                 session,
@@ -347,6 +364,33 @@ async def import_project_files_zip(
         zip_data.close()
 
     return uploaded, skipped
+
+
+async def find_current_file_version_by_identity(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    original_filename: str,
+    sha256_hash: str,
+) -> FileVersion | None:
+    result = await session.execute(
+        select(FileVersion)
+        .join(
+            ProjectFile,
+            and_(
+                ProjectFile.id == FileVersion.file_id,
+                ProjectFile.current_version == FileVersion.version_number,
+            ),
+        )
+        .where(
+            ProjectFile.project_id == project_id,
+            ProjectFile.deleted_at.is_(None),
+            ProjectFile.original_filename == original_filename,
+            ProjectFile.sha256_hash == sha256_hash,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 def _copy_zip_member_to_spooled_file(

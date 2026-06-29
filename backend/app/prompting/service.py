@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -95,6 +95,48 @@ async def save_prompt_plan(
         },
     )
     await session.commit()
+
+
+async def claim_prompt_run(
+    session: AsyncSession,
+    *,
+    run_id: UUID,
+    lease_seconds: int,
+) -> tuple[PromptRun | None, bool, int | None]:
+    now = datetime.now(timezone.utc)
+    lease_until = now + timedelta(seconds=lease_seconds)
+    result = await session.execute(
+        update(PromptRun)
+        .where(
+            PromptRun.id == run_id,
+            PromptRun.status.notin_(
+                {"completed", "failed", "cancelled", "waiting_for_clarification"}
+            ),
+            or_(
+                PromptRun.worker_lease_until.is_(None),
+                PromptRun.worker_lease_until <= now,
+            ),
+        )
+        .values(
+            worker_lease_until=lease_until,
+            worker_attempt_count=PromptRun.worker_attempt_count + 1,
+        )
+        .returning(PromptRun)
+    )
+    run = result.scalar_one_or_none()
+    if run is not None:
+        await session.commit()
+        return run, True, None
+
+    await session.rollback()
+    run = await session.get(PromptRun, run_id)
+    if run is None or run.worker_lease_until is None:
+        return run, False, None
+    retry_seconds = max(
+        1,
+        int((run.worker_lease_until - now).total_seconds()) + 1,
+    )
+    return run, False, retry_seconds
 
 
 async def start_prompt_step(
@@ -208,6 +250,7 @@ async def complete_prompt_run(session: AsyncSession, *, run: PromptRun) -> None:
     run.status = "completed"
     run.error_code = None
     run.error_detail = None
+    run.worker_lease_until = None
     run.completed_at = datetime.now(timezone.utc)
     await write_audit_log(
         session,
@@ -234,6 +277,7 @@ async def fail_prompt_run(
     run.status = "failed"
     run.error_code = code
     run.error_detail = detail[:2_000]
+    run.worker_lease_until = None
     run.completed_at = datetime.now(timezone.utc)
     await write_audit_log(
         session,
@@ -244,6 +288,85 @@ async def fail_prompt_run(
         project_id=run.project_id,
         details={"error_code": code},
     )
+    await session.commit()
+
+
+async def mark_prompt_run_waiting_for_documents(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+    import_data: dict,
+) -> None:
+    metadata = dict(run.attachment_metadata or {})
+    metadata.setdefault("parse_wait_started_at", datetime.now(timezone.utc).isoformat())
+    metadata["import"] = import_data
+    run.attachment_metadata = metadata
+    run.status = "waiting_for_documents"
+    run.worker_lease_until = None
+    await session.commit()
+
+
+async def release_prompt_run_lease(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+) -> None:
+    run.worker_lease_until = None
+    await session.commit()
+
+
+def queue_prompt_notification(
+    run: PromptRun,
+    *,
+    key: str,
+    body: str,
+) -> None:
+    metadata = dict(run.attachment_metadata or {})
+    notifications = dict(metadata.get("notifications") or {})
+    notifications.setdefault(
+        key,
+        {
+            "status": "pending",
+            "body": body,
+        },
+    )
+    metadata["notifications"] = notifications
+    run.attachment_metadata = metadata
+
+
+def pending_prompt_notifications(run: PromptRun) -> list[tuple[str, str]]:
+    metadata = dict(run.attachment_metadata or {})
+    notifications = dict(metadata.get("notifications") or {})
+    pending: list[tuple[str, str]] = []
+    for key, value in notifications.items():
+        item = dict(value) if isinstance(value, dict) else {}
+        body = item.get("body")
+        if item.get("status") == "pending" and isinstance(body, str) and body:
+            pending.append((str(key), body))
+    return pending
+
+
+async def mark_prompt_notification_sent(
+    session: AsyncSession,
+    *,
+    run_id: UUID,
+    key: str,
+    telegram_message_id: int,
+) -> None:
+    run = await session.get(PromptRun, run_id)
+    if run is None:
+        return
+    metadata = dict(run.attachment_metadata or {})
+    notifications = dict(metadata.get("notifications") or {})
+    item = dict(notifications.get(key) or {})
+    if not item:
+        return
+    item["status"] = "sent"
+    item["telegram_message_id"] = telegram_message_id
+    item["sent_at"] = datetime.now(timezone.utc).isoformat()
+    notifications[key] = item
+    metadata["notifications"] = notifications
+    run.attachment_metadata = metadata
     await session.commit()
 
 

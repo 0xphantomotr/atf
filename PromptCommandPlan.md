@@ -567,12 +567,12 @@ Use at least two unrelated technical-folder fixtures. Verify:
 
 ### Phase 2: Attachment orchestration
 
-- [ ] Support `/prompt` in document captions.
-- [ ] Register prompt routing before generic uploads.
-- [ ] Reuse ZIP validation, MinIO storage and immutable file-version services.
-- [ ] Add background prompt actor and parsing wait/resume states.
-- [ ] Report parsed, OCR, failed and unsupported file counts.
-- [ ] Add duplicate webhook and worker-restart tests.
+- [x] Support `/prompt` in document captions.
+- [x] Register prompt routing before generic uploads.
+- [x] Reuse ZIP validation, MinIO storage and immutable file-version services.
+- [x] Add background prompt actor and parsing wait/resume states.
+- [x] Report parsed, OCR, failed and unsupported file counts.
+- [x] Add duplicate webhook and worker-restart tests.
 
 ### Phase 3: Generation and automatic delivery
 

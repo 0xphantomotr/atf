@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     mpp_extractor_command: str = ""
     mpp_extractor_timeout_seconds: int = Field(default=120, ge=5, le=600)
 
+    prompt_worker_lease_seconds: int = Field(default=300, ge=30, le=3_600)
+    prompt_parse_poll_seconds: int = Field(default=5, ge=2, le=300)
+    prompt_parse_timeout_seconds: int = Field(default=7_200, ge=300, le=86_400)
+
 
 @lru_cache
 def get_settings() -> Settings:

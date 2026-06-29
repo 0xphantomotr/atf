@@ -1,11 +1,13 @@
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.projects import service as projects_service
 from app.projects.models import Project
 from app.projects.schemas import ProjectCreate
 from app.prompting import service as prompting_service
+from app.prompting.attachments import import_persisted_attachment
 from app.prompting.models import PromptRun
 from app.prompting.schemas import PromptActionResult, PromptPlan
 from app.telegram.service import (
@@ -47,6 +49,7 @@ async def execute_prompt_plan(
         try:
             action_result, project_id = await _execute_action(
                 session,
+                run=run,
                 action_type=action.type,
                 arguments=arguments,
                 user_id=user_id,
@@ -82,6 +85,7 @@ async def execute_prompt_plan(
 async def _execute_action(
     session: AsyncSession,
     *,
+    run: PromptRun,
     action_type: str,
     arguments: dict,
     user_id: UUID,
@@ -213,6 +217,42 @@ async def _execute_action(
                 action_type=action_type,
                 message=message,
                 data=data,
+            ),
+            project.id,
+        )
+
+    if action_type == "import_attachment":
+        project = await get_active_project(session, user_id=user_id)
+        if project is None:
+            raise PromptExecutionError(
+                "active_project_missing",
+                "Zgjidhni ose krijoni një projekt para importimit të attachment-it.",
+            )
+        try:
+            import_result = await import_persisted_attachment(
+                session,
+                run=run,
+                project_id=project.id,
+                user_id=user_id,
+            )
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                raise
+            raise PromptExecutionError(
+                "attachment_import_failed",
+                str(exc.detail),
+            ) from exc
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=(
+                    "Attachment-i u importua për përpunim.\n"
+                    f"Dokumente të reja: {import_result.uploaded_count}\n"
+                    f"Dokumente ekzistuese të ripërdorura: {import_result.reused_count}\n"
+                    f"Të anashkaluara: {len(import_result.skipped)}"
+                ),
+                data=import_result.as_step_data(),
             ),
             project.id,
         )

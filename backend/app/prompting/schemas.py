@@ -15,6 +15,7 @@ PromptActionType = Literal[
     "select_project",
     "show_active_project",
     "get_status",
+    "import_attachment",
 ]
 
 
