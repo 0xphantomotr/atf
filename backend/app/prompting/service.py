@@ -367,15 +367,22 @@ def queue_prompt_notification(
 ) -> None:
     metadata = dict(run.attachment_metadata or {})
     notifications = dict(metadata.get("notifications") or {})
-    notifications.setdefault(
-        key,
-        {
+    if key not in notifications:
+        sequence = max(
+            (
+                int(item.get("sequence") or 0)
+                for item in notifications.values()
+                if isinstance(item, dict)
+            ),
+            default=0,
+        ) + 1
+        notifications[key] = {
             "status": "pending",
             "kind": kind,
             "body": body,
             "data": data or {},
-        },
-    )
+            "sequence": sequence,
+        }
     metadata["notifications"] = notifications
     run.attachment_metadata = metadata
 
@@ -386,6 +393,7 @@ class PromptNotification:
     kind: str
     body: str
     data: dict
+    sequence: int
 
 
 def pending_prompt_notifications(run: PromptRun) -> list[PromptNotification]:
@@ -406,9 +414,16 @@ def pending_prompt_notifications(run: PromptRun) -> list[PromptNotification]:
                         if isinstance(item.get("data"), dict)
                         else {}
                     ),
+                    sequence=int(item.get("sequence") or 0),
                 )
             )
-    return pending
+    return sorted(
+        pending,
+        key=lambda notification: (
+            notification.sequence if notification.sequence > 0 else 2**31,
+            notification.key,
+        ),
+    )
 
 
 async def mark_prompt_notification_sent(

@@ -116,6 +116,10 @@ def _preflight_text(project_name: str, plan: dict) -> str:
             f"Tokena output (maksimum): {totals.get('max_output_tokens', 0):,}",
             f"Tokena gjithsej (maksimum): {totals.get('estimated_max_tokens', 0):,}",
             "",
+            "Shënim: Ky është një kufi konservativ para nisjes, jo konsumi real. "
+            "Tokenat realë zakonisht janë më të ulët dhe varen nga cache-i, "
+            "dokumentet dhe nevoja për korrigjim.",
+            "",
             "Niseni me /gjenero.",
         ]
     )

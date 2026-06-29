@@ -77,5 +77,9 @@ def format_generation_estimate(project_name: str, estimate: dict) -> str:
         f"Tokena input: {int(totals.get('estimated_input_tokens', 0)):,}",
         f"Tokena output (maksimum): {int(totals.get('max_output_tokens', 0)):,}",
         f"Tokena gjithsej (maksimum): {int(totals.get('estimated_max_tokens', 0)):,}",
+        "",
+        "Shënim: Ky është një kufi konservativ para nisjes, jo konsumi real. "
+        "Tokenat realë zakonisht janë më të ulët dhe varen nga cache-i, dokumentet "
+        "dhe nevoja për korrigjim.",
     ]
     return "\n".join(lines)

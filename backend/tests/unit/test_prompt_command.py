@@ -15,6 +15,7 @@ from app.prompting.confirmation import (
     parse_confirmation_callback,
 )
 from app.prompting.generation import (
+    format_generation_estimate,
     generation_estimate_fingerprint,
     report_output_matches_prompt_job,
 )
@@ -432,6 +433,29 @@ def test_prompt_notifications_are_persisted_idempotently_in_metadata() -> None:
     assert pending[0].key == "completed"
     assert pending[0].kind == "text"
     assert pending[0].body == "Përfundoi."
+    assert pending[0].sequence == 1
+
+
+def test_prompt_notifications_preserve_queue_order_across_jsonb_key_ordering() -> None:
+    run = PromptRun(
+        user_id=uuid4(),
+        telegram_chat_id=100,
+        telegram_message_id=200,
+        status="running",
+        original_prompt="test",
+        plan={},
+        planner_metadata={},
+        attachment_metadata={"notifications": {}},
+        pending_clarification={},
+    )
+
+    queue_prompt_notification(run, key="z_parse_summary", body="Përpunimi përfundoi.")
+    queue_prompt_notification(run, key="a_estimate", body="Vlerësimi.")
+
+    assert [item.key for item in pending_prompt_notifications(run)] == [
+        "z_parse_summary",
+        "a_estimate",
+    ]
 
 
 def test_confirmation_callback_is_short_and_round_trips_run_id() -> None:
@@ -471,6 +495,24 @@ def test_generation_estimate_fingerprint_ignores_timestamp_only() -> None:
 
     assert generation_estimate_fingerprint(first) == generation_estimate_fingerprint(second)
     assert generation_estimate_fingerprint(first) != generation_estimate_fingerprint(changed)
+
+
+def test_generation_estimate_explains_conservative_token_ceiling() -> None:
+    message = format_generation_estimate(
+        "Dosja A",
+        {
+            "source": {"eligible_files": 2, "total_files": 3, "chunk_count": 5},
+            "totals": {
+                "estimated_calls": 4,
+                "estimated_input_tokens": 1_000,
+                "max_output_tokens": 2_000,
+                "estimated_max_tokens": 3_000,
+            },
+        },
+    )
+
+    assert "kufi konservativ" in message
+    assert "jo konsumi real" in message
 
 
 def test_new_generation_prompt_blocks_stale_review_job() -> None:
