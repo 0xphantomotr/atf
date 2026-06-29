@@ -4,6 +4,7 @@
 
 # Local planning and internal documentation
 *.md
+!/README.md
 
 # Private technical dossiers and local reference documents
 *.doc
