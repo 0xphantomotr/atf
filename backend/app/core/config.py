@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     prompt_worker_lease_seconds: int = Field(default=300, ge=30, le=3_600)
     prompt_parse_poll_seconds: int = Field(default=5, ge=2, le=300)
     prompt_parse_timeout_seconds: int = Field(default=7_200, ge=300, le=86_400)
+    prompt_confirmation_timeout_seconds: int = Field(default=900, ge=60, le=86_400)
+    prompt_review_poll_seconds: int = Field(default=10, ge=2, le=300)
 
 
 @lru_cache

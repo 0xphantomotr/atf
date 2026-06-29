@@ -3,6 +3,11 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.db.session import AsyncSessionLocal
+from app.prompting import service as prompting_service
+from app.prompting.status import (
+    generation_prompt_controls_latest_job,
+    prompt_generation_status_message,
+)
 from app.reviews import service as reviews_service
 from app.telegram.service import (
     display_review_job_error,
@@ -31,6 +36,21 @@ async def status_command(message: Message) -> None:
             user_id=user.id,
             project_id=project.id,
         )
+        prompt_run = await prompting_service.get_latest_prompt_run(
+            session,
+            user_id=user.id,
+            project_id=project.id,
+            telegram_chat_id=message.chat.id,
+        )
+        if generation_prompt_controls_latest_job(prompt_run, job):
+            if prompt_run.review_job_id is None:
+                await message.answer(prompt_generation_status_message(prompt_run))
+                return
+            job = await reviews_service.get_review_job(
+                session,
+                job_id=prompt_run.review_job_id,
+                user_id=user.id,
+            )
         if job is None:
             await message.answer(
                 "Nuk ka ende Akt Kolaudimi për projektin aktiv.\n\n"

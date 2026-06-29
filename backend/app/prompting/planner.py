@@ -20,13 +20,17 @@ Allowed actions in this release:
 - show_active_project: show the active project.
 - get_status: show the latest review-job status for the active project.
 - import_attachment: import the attached document or ZIP into the selected project.
+- estimate_kolaudim: calculate the existing professional generation preflight.
+- generate_kolaudim: start one professional Akt Kolaudimi after confirmation.
+- deliver_latest_report: send the PDF from the referenced generation, or the latest
+  completed report when the user explicitly asks only for an existing report.
 
 Rules:
 - Return only JSON matching the supplied schema.
 - Set version exactly to "prompt-plan-v1" and language exactly to "sq-AL".
 - Use sequential IDs step-1, step-2, and so on.
 - Dependencies may reference only earlier step IDs.
-- requires_confirmation must always be false in this release.
+- requires_confirmation must be true only for generate_kolaudim and false otherwise.
 - Never copy, request, store, or expose API keys, tokens, passwords, or secrets.
 - If the request is unsupported, ambiguous, or requires a missing project name, return
   needs_clarification=true, one concise Albanian clarification_question, and no actions.
@@ -34,13 +38,18 @@ Rules:
 - Do not create a project unless the user explicitly asks to create one.
 - Do not select a project unless the user explicitly asks to select/use it, except that a
   newly created project may be selected when the same request asks to use it.
-- Use import_attachment exactly once and as the final action when context.has_attachment
-  is true and the user asks to upload, import, process, or analyze the attached dossier.
-- Set arguments.name to null for import_attachment and every action except create_project
-  and select_project.
+- Use import_attachment exactly once when context.has_attachment is true and the user
+  asks to upload, import, process, or analyze the attached dossier. Generation actions
+  may follow it and must depend on it through the action chain.
+- For every generation request, add estimate_kolaudim followed by generate_kolaudim.
+  generate_kolaudim must depend on estimate_kolaudim.
+- If the user asks to send/deliver the newly generated PDF, add deliver_latest_report,
+  set arguments.job_ref to the generate_kolaudim step ID, and depend on that step.
+- Set arguments.name to null except for create_project and select_project.
+- Set arguments.job_ref to null except for deliver_latest_report.
 - Never use import_attachment when context.has_attachment is false.
-- Generation and dossier Q&A are not available in this release. Ask for clarification
-  instead of inventing generation or Q&A actions.
+- Dossier Q&A is not available in this release. Ask for clarification instead of
+  inventing Q&A actions.
 """.strip()
 
 
@@ -124,18 +133,29 @@ def _apply_server_owned_fields(payload: dict[str, Any]) -> dict[str, Any]:
     actions = normalized.get("actions")
     if isinstance(actions, list):
         normalized_actions: list[Any] = []
+        latest_generation_id: str | None = None
         for value in actions:
             if not isinstance(value, dict):
                 normalized_actions.append(value)
                 continue
             action = dict(value)
-            if action.get("type") not in {"create_project", "select_project"}:
-                arguments = action.get("arguments")
-                normalized_arguments = (
-                    dict(arguments) if isinstance(arguments, dict) else {}
-                )
+            action_type = action.get("type")
+            arguments = action.get("arguments")
+            normalized_arguments = dict(arguments) if isinstance(arguments, dict) else {}
+            if action_type not in {"create_project", "select_project"}:
                 normalized_arguments["name"] = None
-                action["arguments"] = normalized_arguments
+            if action_type == "generate_kolaudim":
+                latest_generation_id = str(action.get("id") or "") or None
+                action["requires_confirmation"] = True
+            else:
+                action["requires_confirmation"] = False
+            if action_type == "deliver_latest_report":
+                normalized_arguments["job_ref"] = (
+                    normalized_arguments.get("job_ref") or latest_generation_id
+                )
+            else:
+                normalized_arguments["job_ref"] = None
+            action["arguments"] = normalized_arguments
             normalized_actions.append(action)
         normalized["actions"] = normalized_actions
     return normalized

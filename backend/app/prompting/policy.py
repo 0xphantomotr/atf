@@ -1,13 +1,16 @@
 from app.prompting.schemas import PromptPlan
 from app.prompting.security import contains_likely_secret
 
-PHASE_ONE_ACTIONS = {
+PROMPT_ACTIONS = {
     "list_projects",
     "create_project",
     "select_project",
     "show_active_project",
     "get_status",
     "import_attachment",
+    "estimate_kolaudim",
+    "generate_kolaudim",
+    "deliver_latest_report",
 }
 MAX_PROMPT_ACTIONS = 8
 
@@ -32,8 +35,11 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
     completed_ids: set[str] = set()
     create_count = 0
     import_count = 0
+    estimate_ids: list[str] = []
+    generation_ids: list[str] = []
+    delivery_count = 0
     for action in plan.actions:
-        if action.type not in PHASE_ONE_ACTIONS:
+        if action.type not in PROMPT_ACTIONS:
             raise PromptPolicyError(
                 "action_not_allowed",
                 f"Veprimi {action.type} nuk mbështetet ende nga /prompt.",
@@ -56,10 +62,15 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                 "invalid_dependency",
                 f"Hapi {action.id} varet nga një hap i panjohur ose i mëvonshëm.",
             )
-        if action.requires_confirmation:
+        if action.type == "generate_kolaudim" and not action.requires_confirmation:
+            raise PromptPolicyError(
+                "generation_confirmation_missing",
+                "Gjenerimi i Akt-Kolaudimit kërkon konfirmim të shprehur.",
+            )
+        if action.type != "generate_kolaudim" and action.requires_confirmation:
             raise PromptPolicyError(
                 "unexpected_confirmation",
-                "Ky plan kërkon një konfirmim që nuk mbështetet ende në fazën e parë.",
+                f"Veprimi {action.type} nuk duhet të kërkojë konfirmim.",
             )
 
         arguments = action.arguments.model_dump(mode="json")
@@ -82,11 +93,44 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                     "multiple_attachment_imports",
                     "Një kërkesë /prompt mund ta importojë attachment-in vetëm një herë.",
                 )
-            if action is not plan.actions[-1]:
+        if action.type == "estimate_kolaudim":
+            estimate_ids.append(action.id)
+            if len(estimate_ids) > 1:
                 raise PromptPolicyError(
-                    "attachment_import_not_final",
-                    "Importimi i dokumenteve duhet të jetë hapi i fundit në këtë fazë.",
+                    "multiple_generation_estimates",
+                    "Një kërkesë /prompt mund të vlerësojë gjenerimin vetëm një herë.",
                 )
+        if action.type == "generate_kolaudim":
+            generation_ids.append(action.id)
+            if len(generation_ids) > 1:
+                raise PromptPolicyError(
+                    "multiple_generations",
+                    "Një kërkesë /prompt mund të nisë vetëm një Akt Kolaudimi.",
+                )
+            if not estimate_ids or estimate_ids[-1] not in action.depends_on:
+                raise PromptPolicyError(
+                    "generation_estimate_missing",
+                    "Gjenerimi duhet të varet nga vlerësimi paraprak.",
+                )
+        if action.type == "deliver_latest_report":
+            delivery_count += 1
+            if delivery_count > 1:
+                raise PromptPolicyError(
+                    "multiple_report_deliveries",
+                    "Një kërkesë /prompt mund ta dërgojë raportin vetëm një herë.",
+                )
+            if generation_ids:
+                generation_id = generation_ids[-1]
+                if action.arguments.job_ref != generation_id:
+                    raise PromptPolicyError(
+                        "report_job_reference_invalid",
+                        "Dërgimi i PDF-së duhet t'i referohet gjenerimit të kësaj kërkese.",
+                    )
+                if generation_id not in action.depends_on:
+                    raise PromptPolicyError(
+                        "report_generation_dependency_missing",
+                        "Dërgimi i PDF-së duhet të varet nga gjenerimi.",
+                    )
 
         completed_ids.add(action.id)
 

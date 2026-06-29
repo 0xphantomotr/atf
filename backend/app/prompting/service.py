@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -110,7 +111,13 @@ async def claim_prompt_run(
         .where(
             PromptRun.id == run_id,
             PromptRun.status.notin_(
-                {"completed", "failed", "cancelled", "waiting_for_clarification"}
+                {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "waiting_for_clarification",
+                    "waiting_for_confirmation",
+                }
             ),
             or_(
                 PromptRun.worker_lease_until.is_(None),
@@ -182,12 +189,15 @@ async def complete_prompt_step(
     step: PromptRunStep,
     result: dict,
     project_id: UUID | None,
+    review_job_id: UUID | None = None,
 ) -> None:
     step.status = "completed"
     step.result_data = result
     step.completed_at = datetime.now(timezone.utc)
     if project_id is not None:
         run.project_id = project_id
+    if review_job_id is not None:
+        run.review_job_id = review_job_id
     result_data = result.get("data")
     safe_result_data = result_data if isinstance(result_data, dict) else {}
     await write_audit_log(
@@ -306,6 +316,38 @@ async def mark_prompt_run_waiting_for_documents(
     await session.commit()
 
 
+async def mark_prompt_run_waiting_for_confirmation(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+) -> None:
+    run.status = "waiting_for_confirmation"
+    run.worker_lease_until = None
+    await session.commit()
+
+
+async def mark_prompt_run_waiting_for_review(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+    review_job_id: UUID,
+) -> None:
+    run.review_job_id = review_job_id
+    run.status = "waiting_for_review"
+    run.worker_lease_until = None
+    await session.commit()
+
+
+async def mark_prompt_run_waiting_for_delivery(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+) -> None:
+    run.status = "waiting_for_delivery"
+    run.worker_lease_until = None
+    await session.commit()
+
+
 async def release_prompt_run_lease(
     session: AsyncSession,
     *,
@@ -320,6 +362,8 @@ def queue_prompt_notification(
     *,
     key: str,
     body: str,
+    kind: str = "text",
+    data: dict | None = None,
 ) -> None:
     metadata = dict(run.attachment_metadata or {})
     notifications = dict(metadata.get("notifications") or {})
@@ -327,22 +371,43 @@ def queue_prompt_notification(
         key,
         {
             "status": "pending",
+            "kind": kind,
             "body": body,
+            "data": data or {},
         },
     )
     metadata["notifications"] = notifications
     run.attachment_metadata = metadata
 
 
-def pending_prompt_notifications(run: PromptRun) -> list[tuple[str, str]]:
+@dataclass(frozen=True)
+class PromptNotification:
+    key: str
+    kind: str
+    body: str
+    data: dict
+
+
+def pending_prompt_notifications(run: PromptRun) -> list[PromptNotification]:
     metadata = dict(run.attachment_metadata or {})
     notifications = dict(metadata.get("notifications") or {})
-    pending: list[tuple[str, str]] = []
+    pending: list[PromptNotification] = []
     for key, value in notifications.items():
         item = dict(value) if isinstance(value, dict) else {}
         body = item.get("body")
         if item.get("status") == "pending" and isinstance(body, str) and body:
-            pending.append((str(key), body))
+            pending.append(
+                PromptNotification(
+                    key=str(key),
+                    kind=str(item.get("kind") or "text"),
+                    body=body,
+                    data=(
+                        dict(item.get("data"))
+                        if isinstance(item.get("data"), dict)
+                        else {}
+                    ),
+                )
+            )
     return pending
 
 
@@ -368,6 +433,93 @@ async def mark_prompt_notification_sent(
     metadata["notifications"] = notifications
     run.attachment_metadata = metadata
     await session.commit()
+
+
+async def finalize_prompt_delivery(
+    session: AsyncSession,
+    *,
+    run_id: UUID,
+) -> None:
+    run = await session.get(PromptRun, run_id)
+    if run is None or run.status != "waiting_for_delivery":
+        return
+    metadata = dict(run.attachment_metadata or {})
+    notifications = dict(metadata.get("notifications") or {})
+    delivery = dict(notifications.get("report_delivery") or {})
+    if delivery.get("status") != "sent":
+        return
+    await complete_prompt_run(session, run=run)
+
+
+async def record_prompt_notification_failure(
+    session: AsyncSession,
+    *,
+    run_id: UUID,
+    detail: str,
+    max_attempts: int = 5,
+) -> bool:
+    await session.rollback()
+    run = await session.get(PromptRun, run_id)
+    if run is None:
+        return True
+    metadata = dict(run.attachment_metadata or {})
+    attempts = int(metadata.get("notification_delivery_attempts") or 0) + 1
+    metadata["notification_delivery_attempts"] = attempts
+    metadata["notification_delivery_error"] = detail[:1_000]
+    run.attachment_metadata = metadata
+    terminal = attempts >= max_attempts
+    if terminal:
+        report_delivery = run.status == "waiting_for_delivery"
+        run.status = "failed"
+        run.error_code = (
+            "report_delivery_failed"
+            if report_delivery
+            else "telegram_notification_failed"
+        )
+        run.error_detail = (
+            (
+                "Akt-Kolaudimi u gjenerua, por dërgimi automatik në Telegram dështoi. "
+                "Përdorni /raportet për ta marrë përsëri."
+            )
+            if report_delivery
+            else "Njoftimi automatik në Telegram dështoi pas disa tentativash."
+        )
+        run.completed_at = datetime.now(timezone.utc)
+        run.worker_lease_until = None
+        await write_audit_log(
+            session,
+            action=(
+                "prompt.report.delivery_failed"
+                if report_delivery
+                else "prompt.notification.delivery_failed"
+            ),
+            entity_type="prompt_run",
+            entity_id=run.id,
+            actor_user_id=run.user_id,
+            project_id=run.project_id,
+            details={"attempts": attempts},
+        )
+    await session.commit()
+    return terminal
+
+
+async def get_latest_prompt_run(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    project_id: UUID | None = None,
+    telegram_chat_id: int | None = None,
+    statuses: set[str] | None = None,
+) -> PromptRun | None:
+    query = select(PromptRun).where(PromptRun.user_id == user_id)
+    if project_id is not None:
+        query = query.where(PromptRun.project_id == project_id)
+    if telegram_chat_id is not None:
+        query = query.where(PromptRun.telegram_chat_id == telegram_chat_id)
+    if statuses:
+        query = query.where(PromptRun.status.in_(statuses))
+    result = await session.execute(query.order_by(PromptRun.created_at.desc()).limit(1))
+    return result.scalar_one_or_none()
 
 
 async def get_prompt_step(

@@ -1,9 +1,9 @@
 import asyncio
 from uuid import UUID
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +15,14 @@ from app.files.service import MAX_UPLOAD_BYTES
 from app.projects import service as projects_service
 from app.prompting import service as prompting_service
 from app.prompting.attachments import persist_prompt_attachment
+from app.prompting.confirmation import (
+    PromptConfirmationError,
+    cancel_generation,
+    cancel_latest_waiting_confirmation,
+    confirm_generation,
+)
 from app.prompting.executor import PromptExecutionError, execute_prompt_plan
+from app.prompting.generation import plan_requires_background
 from app.prompting.planner import PromptPlanningError, plan_prompt
 from app.prompting.policy import PromptPolicyError, validate_prompt_plan
 from app.prompting.schemas import (
@@ -30,6 +37,7 @@ from app.telegram.service import (
     build_upload_from_message,
     get_active_project,
     get_or_create_message_user,
+    get_or_create_telegram_user,
 )
 
 router = Router()
@@ -38,7 +46,8 @@ logger = get_logger(__name__)
 PROMPT_HELP = (
     "Shkruani një kërkesë pas komandës /prompt.\n\n"
     "Mund të listoni, krijoni ose zgjidhni projekte, të kontrolloni statusin "
-    "dhe të importoni një dokument/ZIP të bashkëngjitur.\n\n"
+    "dhe të importoni një dokument/ZIP të bashkëngjitur. Gjithashtu mund të "
+    "vlerësoni, konfirmoni, gjeneroni dhe merrni Akt-Kolaudimin PDF.\n\n"
     "Shembuj:\n"
     "/prompt Shfaq projektet e mia\n"
     "/prompt Krijo projektin Test Dosja Teknike\n"
@@ -46,7 +55,8 @@ PROMPT_HELP = (
     "/prompt Cili është projekti aktiv?\n"
     "/prompt Shfaq statusin\n\n"
     "Me attachment:\n"
-    "/prompt Krijo projektin Test, zgjidhe dhe importo dosjen e bashkëngjitur\n\n"
+    "/prompt Krijo projektin Test, importo dosjen, gjenero Akt-Kolaudimin "
+    "dhe ma dërgo PDF-në\n\n"
     "API key vendoset vetëm me /ai_key dhe jo brenda /prompt."
 )
 
@@ -210,15 +220,22 @@ async def prompt_command(
                 )
                 return
 
-            if has_attachment:
+            if plan_requires_background(planner_result.plan):
                 from app.workers.jobs import run_prompt_workflow
 
                 run_prompt_workflow.send(str(run.id))
-                await message.answer(
-                    "Kërkesa u vendos në radhë.\n\n"
-                    "Attachment-i u ruajt dhe do të importohet në projekt. "
-                    "Do t'ju njoftoj kur përpunimi i dokumenteve të përfundojë."
-                )
+                if has_attachment:
+                    queued_message = (
+                        "Kërkesa u vendos në radhë.\n\n"
+                        "Attachment-i u ruajt dhe do të importohet në projekt. "
+                        "Pas leximit do të merrni vlerësimin dhe konfirmimin e gjenerimit."
+                    )
+                else:
+                    queued_message = (
+                        "Kërkesa u vendos në radhë. "
+                        "Do të merrni vlerësimin para konfirmimit të gjenerimit."
+                    )
+                await message.answer(queued_message)
                 return
 
             results = await execute_prompt_plan(
@@ -298,6 +315,79 @@ async def prompt_command(
             return
 
     await message.answer("\n\n".join(result.message for result in results))
+
+
+@router.callback_query(F.data.startswith("pc:"))
+async def prompt_confirmation_callback(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.message is None:
+        await callback.answer("Konfirmimi nuk është i vlefshëm.", show_alert=True)
+        return
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_telegram_user(
+            session,
+            telegram_user=callback.from_user,
+        )
+        try:
+            if callback.data.startswith("pc:c:"):
+                result = await confirm_generation(
+                    session,
+                    callback_data=callback.data,
+                    user_id=user.id,
+                    telegram_chat_id=callback.message.chat.id,
+                )
+            else:
+                result = await cancel_generation(
+                    session,
+                    callback_data=callback.data,
+                    user_id=user.id,
+                    telegram_chat_id=callback.message.chat.id,
+                )
+        except PromptConfirmationError as exc:
+            if exc.terminal:
+                try:
+                    from app.prompting.confirmation import parse_confirmation_callback
+
+                    _, run_id, _ = parse_confirmation_callback(callback.data)
+                    await prompting_service.fail_prompt_run(
+                        session,
+                        run_id=run_id,
+                        code=exc.code,
+                        detail=exc.user_message,
+                    )
+                except PromptConfirmationError:
+                    pass
+            await callback.answer("Konfirmimi dështoi.", show_alert=True)
+            await callback.message.answer(exc.user_message)
+            return
+
+    await callback.answer(result.message[:180])
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.info(
+            "prompt_confirmation_markup_not_removed",
+            prompt_run_id=str(result.run_id),
+        )
+    await callback.message.answer(result.message)
+    if result.status == "confirmed":
+        from app.workers.jobs import run_prompt_workflow
+
+        run_prompt_workflow.send(str(result.run_id))
+
+
+@router.message(Command("anulo", "cancel"))
+async def cancel_prompt_generation_command(message: Message) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_message_user(session, message)
+        result = await cancel_latest_waiting_confirmation(
+            session,
+            user_id=user.id,
+            telegram_chat_id=message.chat.id,
+        )
+    if result is None:
+        await message.answer("Nuk ka një gjenerim /prompt në pritje për konfirmim.")
+        return
+    await message.answer(result.message)
 
 
 async def _fail_and_answer(

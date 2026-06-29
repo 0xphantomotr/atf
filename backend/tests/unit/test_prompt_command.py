@@ -1,4 +1,6 @@
 import json
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -8,6 +10,14 @@ from app.agents.llm import LLMReviewError
 from app.db.base import Base
 from app.db import models as db_models  # noqa: F401
 from app.prompting.planner import plan_prompt
+from app.prompting.confirmation import (
+    confirmation_callback_data,
+    parse_confirmation_callback,
+)
+from app.prompting.generation import (
+    generation_estimate_fingerprint,
+    report_output_matches_prompt_job,
+)
 from app.prompting.parsing import (
     format_prompt_parse_summary,
     summarize_prompt_parse_records,
@@ -24,6 +34,7 @@ from app.prompting.security import (
     contains_likely_secret,
     redact_likely_secrets,
 )
+from app.prompting.status import generation_prompt_controls_latest_job
 from app.prompting.service import (
     pending_prompt_notifications,
     queue_prompt_notification,
@@ -47,11 +58,12 @@ def _action(
     name: str | None = None,
     depends_on: list[str] | None = None,
     requires_confirmation: bool = False,
+    job_ref: str | None = None,
 ) -> dict:
     return {
         "id": f"step-{step}",
         "type": action_type,
-        "arguments": {"name": name},
+        "arguments": {"name": name, "job_ref": job_ref},
         "depends_on": depends_on or [],
         "requires_confirmation": requires_confirmation,
     }
@@ -129,7 +141,7 @@ def test_policy_rejects_forward_dependencies_and_confirmation() -> None:
     assert confirmation_error.value.code == "unexpected_confirmation"
 
 
-def test_attachment_import_policy_requires_one_final_attachment_action() -> None:
+def test_attachment_import_policy_requires_exactly_one_attachment_action() -> None:
     valid_plan = PromptPlan.model_validate(
         _plan_payload(
             [
@@ -157,21 +169,64 @@ def test_attachment_import_policy_requires_one_final_attachment_action() -> None
         validate_prompt_plan(valid_plan, has_attachment=False)
     assert missing_attachment.value.code == "attachment_missing"
 
-    import_first = PromptPlan.model_validate(
+    import_then_estimate = PromptPlan.model_validate(
         _plan_payload(
             [
                 _action("import_attachment", step=1),
                 _action(
-                    "show_active_project",
+                    "estimate_kolaudim",
                     step=2,
                     depends_on=["step-1"],
                 ),
             ]
         )
     )
-    with pytest.raises(PromptPolicyError) as not_final:
-        validate_prompt_plan(import_first, has_attachment=True)
-    assert not_final.value.code == "attachment_import_not_final"
+    validate_prompt_plan(import_then_estimate, has_attachment=True)
+
+
+def test_generation_plan_requires_estimate_confirmation_and_exact_delivery_ref() -> None:
+    valid_plan = PromptPlan.model_validate(
+        _plan_payload(
+            [
+                _action("estimate_kolaudim", step=1),
+                _action(
+                    "generate_kolaudim",
+                    step=2,
+                    depends_on=["step-1"],
+                    requires_confirmation=True,
+                ),
+                _action(
+                    "deliver_latest_report",
+                    step=3,
+                    depends_on=["step-2"],
+                    job_ref="step-2",
+                ),
+            ]
+        )
+    )
+    validate_prompt_plan(valid_plan)
+
+    no_confirmation = PromptPlan.model_validate(
+        _plan_payload(
+            [
+                _action("estimate_kolaudim", step=1),
+                _action(
+                    "generate_kolaudim",
+                    step=2,
+                    depends_on=["step-1"],
+                ),
+            ]
+        )
+    )
+    with pytest.raises(PromptPolicyError) as confirmation_error:
+        validate_prompt_plan(no_confirmation)
+    assert confirmation_error.value.code == "generation_confirmation_missing"
+
+    wrong_report_ref = valid_plan.model_copy(deep=True)
+    wrong_report_ref.actions[2].arguments.job_ref = "step-1"
+    with pytest.raises(PromptPolicyError) as report_error:
+        validate_prompt_plan(wrong_report_ref)
+    assert report_error.value.code == "report_job_reference_invalid"
 
 
 def test_secret_detection_covers_supported_provider_and_bot_tokens() -> None:
@@ -263,6 +318,39 @@ def test_planner_discards_irrelevant_names_from_non_project_actions() -> None:
     assert result.plan.actions[0].arguments.name is None
 
 
+def test_planner_owns_generation_confirmation_and_delivery_reference() -> None:
+    def fake_request(**kwargs):
+        return _plan_payload(
+            [
+                _action("estimate_kolaudim", step=1),
+                _action(
+                    "generate_kolaudim",
+                    step=2,
+                    depends_on=["step-1"],
+                ),
+                _action(
+                    "deliver_latest_report",
+                    step=3,
+                    depends_on=["step-2"],
+                ),
+            ]
+        ), {}
+
+    result = plan_prompt(
+        "Gjenero Akt-Kolaudimin dhe ma dërgo PDF-në",
+        context=PromptPlanningContext(
+            projects=[PromptProjectContext(name="Dosja A", is_active=True)],
+            has_ai_settings=True,
+            has_attachment=False,
+        ),
+        ai_settings={"provider": "gemini", "model": "gemini-3.1-flash-lite"},
+        request_fn=fake_request,
+    )
+
+    assert result.plan.actions[1].requires_confirmation
+    assert result.plan.actions[2].arguments.job_ref == "step-2"
+
+
 def test_planner_does_not_retry_provider_failures() -> None:
     calls = 0
 
@@ -319,6 +407,8 @@ def test_prompt_tables_are_registered_in_sqlalchemy_metadata() -> None:
     assert "prompt_run_steps" in Base.metadata.tables
     assert "worker_lease_until" in Base.metadata.tables["prompt_runs"].columns
     assert "worker_attempt_count" in Base.metadata.tables["prompt_runs"].columns
+    assert "confirmation_expires_at" in Base.metadata.tables["prompt_runs"].columns
+    assert "prompt_run_id" in Base.metadata.tables["review_jobs"].columns
 
 
 def test_prompt_notifications_are_persisted_idempotently_in_metadata() -> None:
@@ -337,7 +427,84 @@ def test_prompt_notifications_are_persisted_idempotently_in_metadata() -> None:
     queue_prompt_notification(run, key="completed", body="Përfundoi.")
     queue_prompt_notification(run, key="completed", body="Duplikat.")
 
-    assert pending_prompt_notifications(run) == [("completed", "Përfundoi.")]
+    pending = pending_prompt_notifications(run)
+    assert len(pending) == 1
+    assert pending[0].key == "completed"
+    assert pending[0].kind == "text"
+    assert pending[0].body == "Përfundoi."
+
+
+def test_confirmation_callback_is_short_and_round_trips_run_id() -> None:
+    run = PromptRun(
+        id=uuid4(),
+        user_id=uuid4(),
+        telegram_chat_id=100,
+        telegram_message_id=200,
+        status="waiting_for_confirmation",
+        original_prompt="gjenero",
+        plan={},
+        planner_metadata={},
+        attachment_metadata={
+            "confirmation": {"estimate_fingerprint": "a" * 64}
+        },
+        pending_clarification={},
+        confirmation_expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+    )
+
+    value = confirmation_callback_data(run, action="confirm")
+    action, run_id, token = parse_confirmation_callback(value)
+
+    assert len(value.encode("utf-8")) <= 64
+    assert action == "confirm"
+    assert run_id == run.id
+    assert token
+
+
+def test_generation_estimate_fingerprint_ignores_timestamp_only() -> None:
+    first = {
+        "generated_at": "2026-06-29T10:00:00Z",
+        "project_id": str(uuid4()),
+        "totals": {"estimated_calls": 10},
+    }
+    second = {**first, "generated_at": "2026-06-29T10:01:00Z"}
+    changed = {**second, "totals": {"estimated_calls": 11}}
+
+    assert generation_estimate_fingerprint(first) == generation_estimate_fingerprint(second)
+    assert generation_estimate_fingerprint(first) != generation_estimate_fingerprint(changed)
+
+
+def test_new_generation_prompt_blocks_stale_review_job() -> None:
+    now = datetime.now(timezone.utc)
+    run = SimpleNamespace(
+        plan={"actions": [{"type": "generate_kolaudim"}]},
+        review_job_id=None,
+        created_at=now,
+    )
+    old_job = SimpleNamespace(id=uuid4(), created_at=now - timedelta(minutes=5))
+    new_job = SimpleNamespace(id=uuid4(), created_at=now + timedelta(minutes=5))
+
+    assert generation_prompt_controls_latest_job(run, old_job)
+    assert not generation_prompt_controls_latest_job(run, new_job)
+
+
+def test_report_output_must_match_the_prompt_review_job() -> None:
+    linked_job_id = uuid4()
+
+    assert report_output_matches_prompt_job(
+        prompt_review_job_id=linked_job_id,
+        expected_review_job_id=linked_job_id,
+        output_review_job_id=linked_job_id,
+    )
+    assert not report_output_matches_prompt_job(
+        prompt_review_job_id=linked_job_id,
+        expected_review_job_id=linked_job_id,
+        output_review_job_id=uuid4(),
+    )
+    assert not report_output_matches_prompt_job(
+        prompt_review_job_id=None,
+        expected_review_job_id=linked_job_id,
+        output_review_job_id=linked_job_id,
+    )
 
 
 def test_prompt_parse_summary_waits_for_in_progress_versions() -> None:

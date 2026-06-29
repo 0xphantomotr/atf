@@ -1,6 +1,6 @@
 # `/prompt` Command Implementation Plan
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 ## 1. Objective
 
@@ -576,12 +576,12 @@ Use at least two unrelated technical-folder fixtures. Verify:
 
 ### Phase 3: Generation and automatic delivery
 
-- [ ] Reuse the current preflight estimate.
-- [ ] Add confirmation and cancellation callbacks.
-- [ ] Start exactly one `kolaudim_act` review job after confirmation.
-- [ ] Monitor quota pauses and review completion asynchronously.
-- [ ] Deliver only the output linked to the run's review job.
-- [ ] Extend `/status` and `/raportet` with prompt-run awareness.
+- [x] Reuse the current preflight estimate.
+- [x] Add confirmation and cancellation callbacks.
+- [x] Start exactly one `kolaudim_act` review job after confirmation.
+- [x] Monitor quota pauses and review completion asynchronously.
+- [x] Deliver only the output linked to the run's review job.
+- [x] Extend `/status` and `/raportet` with prompt-run awareness.
 
 ### Phase 4: Grounded dossier Q&A
 

@@ -53,6 +53,10 @@ class PromptRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attachment_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     pending_clarification: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     confirmation_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    confirmation_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

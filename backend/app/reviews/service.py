@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import service as ai_service
@@ -166,7 +167,23 @@ async def create_review_job(
     user_id: uuid.UUID,
     payload: GenerateRequest,
     enqueue: bool = True,
+    prompt_run_id: uuid.UUID | None = None,
 ) -> ReviewJob:
+    if prompt_run_id is not None:
+        existing = await _review_job_for_prompt_run(
+            session,
+            prompt_run_id=prompt_run_id,
+        )
+        if existing is not None:
+            if existing.project_id != project_id or existing.requested_by != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Kërkesa /prompt është lidhur me një gjenerim tjetër.",
+                )
+            if enqueue and existing.status == "queued":
+                _enqueue_review_job(existing)
+            return existing
+
     output_format = _normalize_output_format(payload.output_format)
     project = await _get_project_for_user(session, project_id=project_id, user_id=user_id)
     law_scope = _normalize_law_scope(payload.law_scope)
@@ -178,6 +195,7 @@ async def create_review_job(
     )
 
     job = ReviewJob(
+        prompt_run_id=prompt_run_id,
         project_id=project.id,
         requested_by=user_id,
         job_type=payload.job_type,
@@ -196,14 +214,45 @@ async def create_review_job(
         retry_count=0,
     )
     session.add(job)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if prompt_run_id is None:
+            raise
+        existing = await _review_job_for_prompt_run(
+            session,
+            prompt_run_id=prompt_run_id,
+        )
+        if existing is None:
+            raise
+        if enqueue and existing.status == "queued":
+            _enqueue_review_job(existing)
+        return existing
     await session.refresh(job)
 
     if enqueue:
-        from app.workers.jobs import run_review_job
-
-        run_review_job.send(str(job.id))
+        _enqueue_review_job(job)
     return job
+
+
+async def _review_job_for_prompt_run(
+    session: AsyncSession,
+    *,
+    prompt_run_id: uuid.UUID,
+) -> ReviewJob | None:
+    result = await session.execute(
+        select(ReviewJob)
+        .where(ReviewJob.prompt_run_id == prompt_run_id)
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def _enqueue_review_job(job: ReviewJob) -> None:
+    from app.workers.jobs import run_review_job
+
+    run_review_job.send(str(job.id))
 
 
 async def estimate_review_job(
@@ -251,7 +300,7 @@ async def run_queued_review_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Procesi i auditimit nuk u gjet.",
         )
-    if job.status == "completed":
+    if job.status in {"completed", "failed"}:
         return job
     now = datetime.now(timezone.utc)
     if (

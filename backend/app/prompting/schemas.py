@@ -16,11 +16,19 @@ PromptActionType = Literal[
     "show_active_project",
     "get_status",
     "import_attachment",
+    "estimate_kolaudim",
+    "generate_kolaudim",
+    "deliver_latest_report",
 ]
 
 
 class PromptActionArguments(StrictModel):
-    name: str | None = Field(max_length=255)
+    name: str | None = Field(default=None, max_length=255)
+    job_ref: str | None = Field(
+        default=None,
+        pattern=r"^step-[1-9][0-9]*$",
+        max_length=32,
+    )
 
     @field_validator("name")
     @classmethod
@@ -47,6 +55,8 @@ class PromptAction(StrictModel):
             raise ValueError(f"{self.type} requires a project name.")
         if self.type not in project_name_actions and self.arguments.name is not None:
             raise ValueError(f"{self.type} does not accept a project name.")
+        if self.type != "deliver_latest_report" and self.arguments.job_ref is not None:
+            raise ValueError(f"{self.type} does not accept a job reference.")
         return self
 
 

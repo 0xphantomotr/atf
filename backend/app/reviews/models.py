@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,11 @@ from app.db.base import Base, CreatedAtMixin, TimestampMixin, UUIDPrimaryKeyMixi
 class ReviewJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "review_jobs"
 
+    prompt_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        unique=True,
+        nullable=True,
+    )
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id"), nullable=False)
     requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)

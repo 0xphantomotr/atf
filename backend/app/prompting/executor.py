@@ -9,10 +9,17 @@ from app.projects.schemas import ProjectCreate
 from app.prompting import service as prompting_service
 from app.prompting.attachments import import_persisted_attachment
 from app.prompting.models import PromptRun
-from app.prompting.schemas import PromptActionResult, PromptPlan
+from app.prompting.generation import (
+    format_generation_estimate,
+    generation_estimate_fingerprint,
+    kolaudim_request,
+)
+from app.prompting.schemas import PromptAction, PromptActionResult, PromptPlan
+from app.reviews import service as reviews_service
 from app.telegram.service import (
     display_review_job_stage,
     get_active_project,
+    get_latest_completed_review_job,
     get_latest_review_job,
     set_active_project,
 )
@@ -34,52 +41,69 @@ async def execute_prompt_plan(
 ) -> list[PromptActionResult]:
     results: list[PromptActionResult] = []
     for action in plan.actions:
-        arguments = action.arguments.model_dump(mode="json")
-        step, should_execute = await prompting_service.start_prompt_step(
-            session,
-            run=run,
-            step_key=action.id,
-            action_type=action.type,
-            arguments=arguments,
-        )
-        if not should_execute:
-            results.append(_result_from_step(step.result_data, action.id, action.type))
-            continue
-
-        try:
-            action_result, project_id = await _execute_action(
+        results.append(
+            await execute_prompt_action(
                 session,
                 run=run,
-                action_type=action.type,
-                arguments=arguments,
+                action=action,
                 user_id=user_id,
             )
-            action_result = action_result.model_copy(update={"step_key": action.id})
-            await prompting_service.complete_prompt_step(
-                session,
-                run=run,
-                step=step,
-                result=action_result.model_dump(mode="json"),
-                project_id=project_id,
-            )
-            results.append(action_result)
-        except PromptExecutionError as exc:
-            await prompting_service.fail_prompt_step(
-                session,
-                step_id=step.id,
-                code=exc.code,
-                detail=exc.user_message,
-            )
-            raise
-        except Exception as exc:
-            await prompting_service.fail_prompt_step(
-                session,
-                step_id=step.id,
-                code="action_failed",
-                detail=str(exc),
-            )
-            raise
+        )
     return results
+
+
+async def execute_prompt_action(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+    action: PromptAction,
+    user_id: UUID,
+) -> PromptActionResult:
+    arguments = action.arguments.model_dump(mode="json")
+    step, should_execute = await prompting_service.start_prompt_step(
+        session,
+        run=run,
+        step_key=action.id,
+        action_type=action.type,
+        arguments=arguments,
+    )
+    if not should_execute:
+        return _result_from_step(step.result_data, action.id, action.type)
+
+    try:
+        action_result, project_id, review_job_id = await _execute_action(
+            session,
+            run=run,
+            action_type=action.type,
+            arguments=arguments,
+            user_id=user_id,
+        )
+        action_result = action_result.model_copy(update={"step_key": action.id})
+        await prompting_service.complete_prompt_step(
+            session,
+            run=run,
+            step=step,
+            result=action_result.model_dump(mode="json"),
+            project_id=project_id,
+            review_job_id=review_job_id,
+        )
+        return action_result
+    except PromptExecutionError as exc:
+        await prompting_service.fail_prompt_step(
+            session,
+            step_id=step.id,
+            code=exc.code,
+            detail=exc.user_message,
+        )
+        raise
+    except Exception as exc:
+        await prompting_service.fail_prompt_step(
+            session,
+            step_id=step.id,
+            code="action_failed",
+            detail=str(exc),
+        )
+        raise
 
 
 async def _execute_action(
@@ -89,7 +113,7 @@ async def _execute_action(
     action_type: str,
     arguments: dict,
     user_id: UUID,
-) -> tuple[PromptActionResult, UUID | None]:
+) -> tuple[PromptActionResult, UUID | None, UUID | None]:
     if action_type == "list_projects":
         projects = await projects_service.list_projects(session, user_id=user_id)
         active = await get_active_project(session, user_id=user_id)
@@ -105,6 +129,7 @@ async def _execute_action(
                 },
             ),
             active.id if active else None,
+            None,
         )
 
     if action_type == "create_project":
@@ -135,6 +160,7 @@ async def _execute_action(
                 data={"project_id": str(project.id), "project_name": project.name},
             ),
             project.id,
+            None,
         )
 
     if action_type == "select_project":
@@ -158,6 +184,7 @@ async def _execute_action(
                 data={"project_id": str(project.id), "project_name": project.name},
             ),
             project.id,
+            None,
         )
 
     if action_type == "show_active_project":
@@ -179,6 +206,7 @@ async def _execute_action(
                 data={"project_id": str(project.id), "project_name": project.name},
             ),
             project.id,
+            None,
         )
 
     if action_type == "get_status":
@@ -219,6 +247,7 @@ async def _execute_action(
                 data=data,
             ),
             project.id,
+            None,
         )
 
     if action_type == "import_attachment":
@@ -255,12 +284,141 @@ async def _execute_action(
                 data=import_result.as_step_data(),
             ),
             project.id,
+            None,
+        )
+
+    if action_type == "estimate_kolaudim":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        estimate = await reviews_service.estimate_review_job(
+            session,
+            project_id=project.id,
+            user_id=user_id,
+            payload=kolaudim_request(),
+        )
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=format_generation_estimate(project.name, estimate),
+                data={
+                    "project_id": str(project.id),
+                    "estimate": estimate,
+                    "estimate_fingerprint": generation_estimate_fingerprint(estimate),
+                },
+            ),
+            project.id,
+            None,
+        )
+
+    if action_type == "generate_kolaudim":
+        if run.confirmed_at is None:
+            raise PromptExecutionError(
+                "generation_not_confirmed",
+                "Gjenerimi nuk është konfirmuar.",
+            )
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        job = await reviews_service.create_review_job(
+            session,
+            project_id=project.id,
+            user_id=user_id,
+            payload=kolaudim_request(),
+            prompt_run_id=run.id,
+        )
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=f"Gjenerimi i Akt-Kolaudimit nisi për projektin: {project.name}",
+                data={
+                    "project_id": str(project.id),
+                    "review_job_id": str(job.id),
+                    "status": job.status,
+                },
+            ),
+            project.id,
+            job.id,
+        )
+
+    if action_type == "deliver_latest_report":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        job = None
+        if run.review_job_id is not None:
+            job = await reviews_service.get_review_job(
+                session,
+                job_id=run.review_job_id,
+                user_id=user_id,
+            )
+        elif arguments.get("job_ref") is None:
+            job = await get_latest_completed_review_job(
+                session,
+                user_id=user_id,
+                project_id=project.id,
+            )
+        if job is None:
+            raise PromptExecutionError(
+                "report_job_missing",
+                "Nuk u gjet një gjenerim i përfunduar për këtë kërkesë.",
+            )
+        if job.status != "completed":
+            raise PromptExecutionError(
+                "report_not_ready",
+                f"Akt-Kolaudimi nuk është ende gati. Statusi: {job.status}.",
+            )
+        _, outputs = await reviews_service.get_review_job_outputs(
+            session,
+            job_id=job.id,
+            user_id=user_id,
+        )
+        pdf_output = next(
+            (output for output in outputs if output.output_type == "pdf"),
+            None,
+        )
+        if pdf_output is None or pdf_output.review_job_id != job.id:
+            raise PromptExecutionError(
+                "report_pdf_missing",
+                "Gjenerimi përfundoi, por PDF-ja e lidhur me të nuk u gjet.",
+            )
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=f"Akt-Kolaudimi është gati për projektin: {project.name}",
+                data={
+                    "project_id": str(project.id),
+                    "review_job_id": str(job.id),
+                    "output_id": str(pdf_output.id),
+                    "project_name": project.name,
+                },
+            ),
+            project.id,
+            job.id,
         )
 
     raise PromptExecutionError(
         "action_not_implemented",
         f"Veprimi {action_type} nuk është implementuar.",
     )
+
+
+async def _prompt_project(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+    user_id: UUID,
+) -> Project:
+    if run.project_id is not None:
+        return await projects_service.get_project(
+            session,
+            project_id=run.project_id,
+            user_id=user_id,
+        )
+    project = await get_active_project(session, user_id=user_id)
+    if project is None:
+        raise PromptExecutionError(
+            "active_project_missing",
+            "Nuk keni projekt aktiv për këtë veprim.",
+        )
+    return project
 
 
 async def _resolve_project_by_name(
