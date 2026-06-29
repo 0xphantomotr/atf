@@ -53,7 +53,8 @@ PROMPT_HELP = (
     "/prompt Krijo projektin Test Dosja Teknike\n"
     "/prompt Zgjidh projektin Test Dosja Teknike\n"
     "/prompt Cili është projekti aktiv?\n"
-    "/prompt Shfaq statusin\n\n"
+    "/prompt Shfaq statusin\n"
+    "/prompt Kush është sipërmarrësi sipas dosjes aktive?\n\n"
     "Me attachment:\n"
     "/prompt Krijo projektin Test, importo dosjen, gjenero Akt-Kolaudimin "
     "dhe ma dërgo PDF-në\n\n"
@@ -229,6 +230,14 @@ async def prompt_command(
                         "Kërkesa u vendos në radhë.\n\n"
                         "Attachment-i u ruajt dhe do të importohet në projekt. "
                         "Pas leximit do të merrni vlerësimin dhe konfirmimin e gjenerimit."
+                    )
+                elif any(
+                    action.type == "answer_project_question"
+                    for action in planner_result.plan.actions
+                ):
+                    queued_message = (
+                        "Pyetja u vendos në radhë. Po kërkoj vetëm në versionet aktuale "
+                        "të dosjes së projektit aktiv."
                     )
                 else:
                     queued_message = (

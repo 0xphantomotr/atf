@@ -11,6 +11,7 @@ PROMPT_ACTIONS = {
     "estimate_kolaudim",
     "generate_kolaudim",
     "deliver_latest_report",
+    "answer_project_question",
 }
 MAX_PROMPT_ACTIONS = 8
 
@@ -38,6 +39,7 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
     estimate_ids: list[str] = []
     generation_ids: list[str] = []
     delivery_count = 0
+    question_count = 0
     for action in plan.actions:
         if action.type not in PROMPT_ACTIONS:
             raise PromptPolicyError(
@@ -132,7 +134,32 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                         "Dërgimi i PDF-së duhet të varet nga gjenerimi.",
                     )
 
+        if action.type == "answer_project_question":
+            question_count += 1
+            if question_count > 1:
+                raise PromptPolicyError(
+                    "multiple_project_questions",
+                    "Një kërkesë /prompt mund të bëjë vetëm një pyetje për dosjen.",
+                )
+            if action is not plan.actions[-1]:
+                raise PromptPolicyError(
+                    "project_question_not_final",
+                    "Pyetja për dosjen duhet të jetë hapi i fundit i kërkesës.",
+                )
+
         completed_ids.add(action.id)
+
+    if question_count:
+        incompatible = {
+            action.type
+            for action in plan.actions
+            if action.type not in {"select_project", "answer_project_question"}
+        }
+        if incompatible:
+            raise PromptPolicyError(
+                "project_question_action_conflict",
+                "Pyetja për dosjen mund të kombinohet vetëm me zgjedhjen e projektit.",
+            )
 
     if has_attachment and import_count != 1:
         raise PromptPolicyError(

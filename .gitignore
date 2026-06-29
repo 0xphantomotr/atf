@@ -1,6 +1,37 @@
 .env
 .env.*
 !.env.example
+
+# Local planning and internal documentation
+*.md
+
+# Private technical dossiers and local reference documents
+*.doc
+*.docx
+*.zip
+*.7z
+*.rar
+*.pdf
+!Vendim_nr_610_date_22_9_2022_Per_percaktimin_e_rregullave_te_detajuara.pdf
+
+# Credentials and local certificates
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Local databases and exports
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql
+*.tar
+*.tgz
+*.gz
+
 __pycache__/
 *.py[cod]
 *.pyo
@@ -18,5 +49,3 @@ venv/
 data/
 tmp/
 *.log
-plan.md
-improvements.md

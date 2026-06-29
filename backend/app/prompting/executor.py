@@ -3,12 +3,14 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import service as ai_service
 from app.projects import service as projects_service
 from app.projects.models import Project
 from app.projects.schemas import ProjectCreate
 from app.prompting import service as prompting_service
 from app.prompting.attachments import import_persisted_attachment
 from app.prompting.models import PromptRun
+from app.prompting.qa import ProjectQuestionError, answer_project_question
 from app.prompting.generation import (
     format_generation_estimate,
     generation_estimate_fingerprint,
@@ -392,6 +394,56 @@ async def _execute_action(
             ),
             project.id,
             job.id,
+        )
+
+    if action_type == "answer_project_question":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        question = arguments.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise PromptExecutionError(
+                "project_question_missing",
+                "Kërkesa nuk përmban pyetjen për dosjen teknike.",
+            )
+        ai_settings = await ai_service.get_user_ai_credentials(
+            session,
+            user_id=user_id,
+        )
+        if ai_settings is None:
+            raise PromptExecutionError(
+                "ai_settings_missing",
+                "Pyetja për dosjen kërkon konfigurim AI. Përdorni /ai_key.",
+            )
+        try:
+            answer = await answer_project_question(
+                session,
+                project_id=project.id,
+                question=question,
+                ai_settings=ai_settings,
+            )
+        except ProjectQuestionError as exc:
+            raise PromptExecutionError(
+                "project_question_failed",
+                str(exc),
+            ) from exc
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=answer.message,
+                data={
+                    "project_id": str(project.id),
+                    "project_name": project.name,
+                    "answer": answer.answer,
+                    "certainty": answer.certainty,
+                    "evidence_ids": answer.evidence_ids,
+                    "source_labels": answer.source_labels,
+                    "follow_up_suggestion": answer.follow_up_suggestion,
+                    "token_usage": answer.token_usage,
+                    "retrieval": answer.retrieval,
+                },
+            ),
+            project.id,
+            None,
         )
 
     raise PromptExecutionError(

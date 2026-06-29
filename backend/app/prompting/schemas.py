@@ -19,11 +19,13 @@ PromptActionType = Literal[
     "estimate_kolaudim",
     "generate_kolaudim",
     "deliver_latest_report",
+    "answer_project_question",
 ]
 
 
 class PromptActionArguments(StrictModel):
     name: str | None = Field(default=None, max_length=255)
+    question: str | None = Field(default=None, max_length=3_000)
     job_ref: str | None = Field(
         default=None,
         pattern=r"^step-[1-9][0-9]*$",
@@ -38,6 +40,16 @@ class PromptActionArguments(StrictModel):
         normalized = " ".join(value.split())
         if not normalized:
             raise ValueError("Project name cannot be empty.")
+        return normalized
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Project question cannot be empty.")
         return normalized
 
 
@@ -55,6 +67,10 @@ class PromptAction(StrictModel):
             raise ValueError(f"{self.type} requires a project name.")
         if self.type not in project_name_actions and self.arguments.name is not None:
             raise ValueError(f"{self.type} does not accept a project name.")
+        if self.type == "answer_project_question" and self.arguments.question is None:
+            raise ValueError("answer_project_question requires a question.")
+        if self.type != "answer_project_question" and self.arguments.question is not None:
+            raise ValueError(f"{self.type} does not accept a question.")
         if self.type != "deliver_latest_report" and self.arguments.job_ref is not None:
             raise ValueError(f"{self.type} does not accept a job reference.")
         return self

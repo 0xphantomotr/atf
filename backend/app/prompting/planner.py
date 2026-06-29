@@ -11,7 +11,8 @@ from app.prompting.schemas import PROMPT_PLAN_VERSION, PromptPlan, PromptPlannin
 PROMPT_PLANNER_SYSTEM_PROMPT = """
 You are the action planner for an Albanian Telegram application that manages technical
 construction dossiers. Convert only the user's explicit request into a small structured
-plan. Do not answer dossier questions and do not invent projects.
+plan. Do not answer dossier questions directly; route them to the dedicated action. Do not
+invent projects.
 
 Allowed actions in this release:
 - list_projects: list the user's projects.
@@ -24,6 +25,8 @@ Allowed actions in this release:
 - generate_kolaudim: start one professional Akt Kolaudimi after confirmation.
 - deliver_latest_report: send the PDF from the referenced generation, or the latest
   completed report when the user explicitly asks only for an existing report.
+- answer_project_question: answer one informational question from the active project's
+  technical dossier. This action never creates, changes, imports, generates, or sends files.
 
 Rules:
 - Return only JSON matching the supplied schema.
@@ -46,10 +49,16 @@ Rules:
 - If the user asks to send/deliver the newly generated PDF, add deliver_latest_report,
   set arguments.job_ref to the generate_kolaudim step ID, and depend on that step.
 - Set arguments.name to null except for create_project and select_project.
+- Set arguments.question to null. The server attaches the original user request only to
+  answer_project_question after planning.
 - Set arguments.job_ref to null except for deliver_latest_report.
 - Never use import_attachment when context.has_attachment is false.
-- Dossier Q&A is not available in this release. Ask for clarification instead of
-  inventing Q&A actions.
+- For a question about facts, dates, parties, contracts, technical evidence, conflicts,
+  or VKM 610 in the active dossier, use answer_project_question. It may follow an explicit
+  select_project action, but do not combine it with creation, import, generation, status,
+  listing, or report delivery.
+- If no project is active and the request does not explicitly select an existing project,
+  ask which project should be used instead of planning answer_project_question.
 """.strip()
 
 
@@ -99,7 +108,7 @@ def plan_prompt(
                 max_output_tokens=1_200,
             )
             _merge_token_usage(token_usage, usage)
-            payload = _apply_server_owned_fields(payload)
+            payload = _apply_server_owned_fields(payload, prompt=clean_prompt)
             return PromptPlannerResult(
                 plan=PromptPlan.model_validate(payload),
                 token_usage=token_usage,
@@ -126,7 +135,11 @@ def _planner_user_content(prompt: str, *, context: PromptPlanningContext) -> str
     )
 
 
-def _apply_server_owned_fields(payload: dict[str, Any]) -> dict[str, Any]:
+def _apply_server_owned_fields(
+    payload: dict[str, Any],
+    *,
+    prompt: str,
+) -> dict[str, Any]:
     normalized = dict(payload)
     normalized["version"] = PROMPT_PLAN_VERSION
     normalized["language"] = "sq-AL"
@@ -144,6 +157,9 @@ def _apply_server_owned_fields(payload: dict[str, Any]) -> dict[str, Any]:
             normalized_arguments = dict(arguments) if isinstance(arguments, dict) else {}
             if action_type not in {"create_project", "select_project"}:
                 normalized_arguments["name"] = None
+            normalized_arguments["question"] = (
+                prompt if action_type == "answer_project_question" else None
+            )
             if action_type == "generate_kolaudim":
                 latest_generation_id = str(action.get("id") or "") or None
                 action["requires_confirmation"] = True

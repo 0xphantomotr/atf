@@ -11,6 +11,7 @@ BACKGROUND_ACTIONS = {
     "estimate_kolaudim",
     "generate_kolaudim",
     "deliver_latest_report",
+    "answer_project_question",
 }
 
 

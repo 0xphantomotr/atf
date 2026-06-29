@@ -174,11 +174,34 @@ async def _advance_plan(
             )
             return PromptAdvanceResult()
 
-    prompting_service.queue_prompt_notification(
-        run,
-        key="prompt_run_completed",
-        body="Kërkesa /prompt përfundoi me sukses.",
+    question_action = next(
+        (action for action in plan.actions if action.type == "answer_project_question"),
+        None,
     )
+    if question_action is not None:
+        question_step = await prompting_service.get_prompt_step(
+            session,
+            run_id=run.id,
+            step_key=question_action.id,
+        )
+        result_data = dict(question_step.result_data or {}) if question_step else {}
+        answer_message = result_data.get("message")
+        if not isinstance(answer_message, str) or not answer_message:
+            raise PromptExecutionError(
+                "project_answer_missing",
+                "Përgjigjja për dosjen nuk u ruajt siç duhet.",
+            )
+        prompting_service.queue_prompt_notification(
+            run,
+            key="project_question_answered",
+            body=answer_message,
+        )
+    else:
+        prompting_service.queue_prompt_notification(
+            run,
+            key="prompt_run_completed",
+            body="Kërkesa /prompt përfundoi me sukses.",
+        )
     await prompting_service.complete_prompt_run(session, run=run)
     return PromptAdvanceResult()
 
