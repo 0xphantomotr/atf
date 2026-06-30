@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit_log.service import write_audit_log
+from app.core.config import settings
 from app.prompting.models import PromptRun, PromptRunStep
 from app.prompting.schemas import PromptPlan
 
@@ -77,7 +78,17 @@ async def save_prompt_plan(
     }
     run.status = "waiting_for_clarification" if plan.needs_clarification else "queued"
     run.pending_clarification = (
-        {"question": plan.clarification_question} if plan.needs_clarification else {}
+        {
+            "question": plan.clarification_question,
+            "kind": plan.clarification_kind,
+            "options": plan.clarification_options,
+            "expires_at": (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=settings.prompt_clarification_timeout_seconds)
+            ).isoformat(),
+        }
+        if plan.needs_clarification
+        else {}
     )
     await write_audit_log(
         session,

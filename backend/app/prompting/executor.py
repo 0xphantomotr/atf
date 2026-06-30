@@ -9,13 +9,14 @@ from app.projects.models import Project
 from app.projects.schemas import ProjectCreate
 from app.prompting import service as prompting_service
 from app.prompting.attachments import import_persisted_attachment
-from app.prompting.models import PromptRun
-from app.prompting.qa import ProjectQuestionError, answer_project_question
+from app.prompting.context import load_qa_follow_up_context
 from app.prompting.generation import (
     format_generation_estimate,
     generation_estimate_fingerprint,
     kolaudim_request,
 )
+from app.prompting.models import PromptRun
+from app.prompting.qa import ProjectQuestionError, answer_project_question
 from app.prompting.schemas import PromptAction, PromptActionResult, PromptPlan
 from app.reviews import service as reviews_service
 from app.telegram.service import (
@@ -396,6 +397,36 @@ async def _execute_action(
             job.id,
         )
 
+    if action_type == "select_ai_model":
+        model = arguments.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise PromptExecutionError(
+                "ai_model_missing",
+                "Kërkesa nuk përmban emrin e modelit AI.",
+            )
+        setting = await ai_service.update_user_ai_model(
+            session,
+            user_id=user_id,
+            model=model,
+        )
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=(
+                    "Modeli AI u përditësua.\n"
+                    f"Provider: {setting.provider}\n"
+                    f"Modeli: {setting.selected_model}"
+                ),
+                data={
+                    "provider": setting.provider,
+                    "model": setting.selected_model,
+                },
+            ),
+            run.project_id,
+            None,
+        )
+
     if action_type == "answer_project_question":
         project = await _prompt_project(session, run=run, user_id=user_id)
         question = arguments.get("question")
@@ -414,11 +445,19 @@ async def _execute_action(
                 "Pyetja për dosjen kërkon konfigurim AI. Përdorni /ai_key.",
             )
         try:
+            follow_up_context = await load_qa_follow_up_context(
+                session,
+                user_id=user_id,
+                telegram_chat_id=run.telegram_chat_id,
+                project_id=project.id,
+                exclude_run_id=run.id,
+            )
             answer = await answer_project_question(
                 session,
                 project_id=project.id,
                 question=question,
                 ai_settings=ai_settings,
+                follow_up_context=follow_up_context,
             )
         except ProjectQuestionError as exc:
             raise PromptExecutionError(

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     prompt_parse_timeout_seconds: int = Field(default=7_200, ge=300, le=86_400)
     prompt_confirmation_timeout_seconds: int = Field(default=900, ge=60, le=86_400)
     prompt_review_poll_seconds: int = Field(default=10, ge=2, le=300)
+    prompt_clarification_timeout_seconds: int = Field(default=900, ge=60, le=86_400)
+    prompt_rate_limit_window_seconds: int = Field(default=60, ge=10, le=3_600)
+    prompt_rate_limit_max_requests: int = Field(default=6, ge=0, le=1_000)
+    prompt_daily_max_requests: int = Field(default=100, ge=0, le=100_000)
+    prompt_daily_max_ai_tokens: int = Field(default=250_000, ge=0)
 
 
 @lru_cache

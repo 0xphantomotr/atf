@@ -12,6 +12,7 @@ PROMPT_ACTIONS = {
     "generate_kolaudim",
     "deliver_latest_report",
     "answer_project_question",
+    "select_ai_model",
 }
 MAX_PROMPT_ACTIONS = 8
 
@@ -40,6 +41,7 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
     generation_ids: list[str] = []
     delivery_count = 0
     question_count = 0
+    model_selection_ids: list[str] = []
     for action in plan.actions:
         if action.type not in PROMPT_ACTIONS:
             raise PromptPolicyError(
@@ -102,6 +104,11 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                     "multiple_generation_estimates",
                     "Një kërkesë /prompt mund të vlerësojë gjenerimin vetëm një herë.",
                 )
+            if model_selection_ids and model_selection_ids[-1] not in action.depends_on:
+                raise PromptPolicyError(
+                    "estimate_model_dependency_missing",
+                    "Vlerësimi duhet të varet nga zgjedhja e modelit.",
+                )
         if action.type == "generate_kolaudim":
             generation_ids.append(action.id)
             if len(generation_ids) > 1:
@@ -146,6 +153,19 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                     "project_question_not_final",
                     "Pyetja për dosjen duhet të jetë hapi i fundit i kërkesës.",
                 )
+            if model_selection_ids and model_selection_ids[-1] not in action.depends_on:
+                raise PromptPolicyError(
+                    "question_model_dependency_missing",
+                    "Pyetja duhet të varet nga zgjedhja e modelit.",
+                )
+
+        if action.type == "select_ai_model":
+            model_selection_ids.append(action.id)
+            if len(model_selection_ids) > 1:
+                raise PromptPolicyError(
+                    "multiple_model_selections",
+                    "Një kërkesë /prompt mund të zgjedhë vetëm një model AI.",
+                )
 
         completed_ids.add(action.id)
 
@@ -153,13 +173,26 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
         incompatible = {
             action.type
             for action in plan.actions
-            if action.type not in {"select_project", "answer_project_question"}
+            if action.type
+            not in {"select_project", "select_ai_model", "answer_project_question"}
         }
         if incompatible:
             raise PromptPolicyError(
                 "project_question_action_conflict",
-                "Pyetja për dosjen mund të kombinohet vetëm me zgjedhjen e projektit.",
+                "Pyetja për dosjen mund të kombinohet vetëm me zgjedhjen e projektit "
+                "ose modelit AI.",
             )
+
+    if model_selection_ids:
+        model_step_id = model_selection_ids[0]
+        for action in plan.actions:
+            if action.type not in {"estimate_kolaudim", "answer_project_question"}:
+                continue
+            if model_step_id not in action.depends_on:
+                raise PromptPolicyError(
+                    "ai_action_model_dependency_missing",
+                    "Veprimi AI duhet të varet nga zgjedhja e modelit.",
+                )
 
     if has_attachment and import_count != 1:
         raise PromptPolicyError(

@@ -16,6 +16,7 @@ final review by a qualified kolaudator.
 - VKM 610/2022 rule and legal-context support
 - LangGraph-based document analysis and Akt Kolaudimi drafting
 - Grounded dossier Q&A with verified filenames and source coordinates
+- Bounded follow-up questions, clarification prompts and action previews
 - OpenAI, Gemini and Groq user-provided API keys
 - Background processing, quota handling and automatic Telegram PDF delivery
 
@@ -60,6 +61,7 @@ Natural-language workflows are available through `/prompt`:
 ```text
 /prompt Shfaq projektet e mia
 /prompt Kush është sipërmarrësi sipas dosjes aktive?
+/prompt Po cila është data e kontratës?
 /prompt Gjenero Akt Kolaudimin për projektin aktiv dhe ma dërgo PDF-në
 ```
 

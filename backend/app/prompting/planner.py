@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.agents.llm import LLMReviewError, request_structured_completion
+from app.prompting.intents import detect_intent_hints
 from app.prompting.schemas import PROMPT_PLAN_VERSION, PromptPlan, PromptPlanningContext
 
 PROMPT_PLANNER_SYSTEM_PROMPT = """
@@ -27,6 +28,7 @@ Allowed actions in this release:
   completed report when the user explicitly asks only for an existing report.
 - answer_project_question: answer one informational question from the active project's
   technical dossier. This action never creates, changes, imports, generates, or sends files.
+- select_ai_model: select one exact model name for the user's already configured provider.
 
 Rules:
 - Return only JSON matching the supplied schema.
@@ -36,7 +38,13 @@ Rules:
 - requires_confirmation must be true only for generate_kolaudim and false otherwise.
 - Never copy, request, store, or expose API keys, tokens, passwords, or secrets.
 - If the request is unsupported, ambiguous, or requires a missing project name, return
-  needs_clarification=true, one concise Albanian clarification_question, and no actions.
+  needs_clarification=true, one concise Albanian clarification_question, a clarification_kind
+  of project, model, or action, and no actions.
+- Use context.pending_clarification to combine the original request with the user's current
+  clarification response. Do not repeat a completed earlier action from recent_turns unless
+  the current request explicitly asks for it.
+- recent_turns contain only requests and accepted action names, never dossier evidence.
+  An elliptical follow-up after answer_project_question should remain a dossier question.
 - If an exact project name is available in context, preserve its displayed spelling.
 - Do not create a project unless the user explicitly asks to create one.
 - Do not select a project unless the user explicitly asks to select/use it, except that a
@@ -49,6 +57,10 @@ Rules:
 - If the user asks to send/deliver the newly generated PDF, add deliver_latest_report,
   set arguments.job_ref to the generate_kolaudim step ID, and depend on that step.
 - Set arguments.name to null except for create_project and select_project.
+- Set arguments.model to null except for select_ai_model. Model selection requires an exact
+  model name; otherwise ask a model clarification and suggest /ai_models.
+- When select_ai_model is followed by estimate_kolaudim or answer_project_question, that
+  AI action must depend directly on the model-selection step.
 - Set arguments.question to null. The server attaches the original user request only to
   answer_project_question after planning.
 - Set arguments.job_ref to null except for deliver_latest_report.
@@ -59,6 +71,8 @@ Rules:
   listing, or report delivery.
 - If no project is active and the request does not explicitly select an existing project,
   ask which project should be used instead of planning answer_project_question.
+- Deterministic intent_hints are advisory. The final plan must still obey the user's explicit
+  request and every policy rule.
 """.strip()
 
 
@@ -108,7 +122,11 @@ def plan_prompt(
                 max_output_tokens=1_200,
             )
             _merge_token_usage(token_usage, usage)
-            payload = _apply_server_owned_fields(payload, prompt=clean_prompt)
+            payload = _apply_server_owned_fields(
+                payload,
+                prompt=clean_prompt,
+                context=context,
+            )
             return PromptPlannerResult(
                 plan=PromptPlan.model_validate(payload),
                 token_usage=token_usage,
@@ -129,6 +147,10 @@ def _planner_user_content(prompt: str, *, context: PromptPlanningContext) -> str
     return json.dumps(
         {
             "user_request": prompt,
+            "intent_hints": detect_intent_hints(
+                prompt,
+                has_attachment=context.has_attachment,
+            ),
             "context": context.model_dump(mode="json"),
         },
         ensure_ascii=False,
@@ -139,10 +161,24 @@ def _apply_server_owned_fields(
     payload: dict[str, Any],
     *,
     prompt: str,
+    context: PromptPlanningContext,
 ) -> dict[str, Any]:
     normalized = dict(payload)
     normalized["version"] = PROMPT_PLAN_VERSION
     normalized["language"] = "sq-AL"
+    needs_clarification = normalized.get("needs_clarification") is True
+    if needs_clarification:
+        kind = normalized.get("clarification_kind")
+        if kind not in {"project", "model", "action"}:
+            kind = _infer_clarification_kind(normalized, context=context)
+        normalized["clarification_kind"] = kind
+        normalized["clarification_options"] = _clarification_options(
+            kind,
+            context=context,
+        )
+    else:
+        normalized["clarification_kind"] = None
+        normalized["clarification_options"] = []
     actions = normalized.get("actions")
     if isinstance(actions, list):
         normalized_actions: list[Any] = []
@@ -155,10 +191,35 @@ def _apply_server_owned_fields(
             action_type = action.get("type")
             arguments = action.get("arguments")
             normalized_arguments = dict(arguments) if isinstance(arguments, dict) else {}
-            if action_type not in {"create_project", "select_project"}:
+            selected_option = _selected_clarification_option(prompt, context=context)
+            if (
+                action_type == "select_project"
+                and context.pending_clarification is not None
+                and context.pending_clarification.kind == "project"
+                and selected_option is not None
+            ):
+                normalized_arguments["name"] = selected_option
+            elif action_type not in {"create_project", "select_project"}:
                 normalized_arguments["name"] = None
+            if action_type == "select_ai_model":
+                candidate_model = normalized_arguments.get("model")
+                if (
+                    context.pending_clarification is not None
+                    and context.pending_clarification.kind == "model"
+                    and selected_option is not None
+                ):
+                    normalized_arguments["model"] = selected_option
+                elif (
+                    not isinstance(candidate_model, str)
+                    or candidate_model.casefold() not in prompt.casefold()
+                ):
+                    normalized_arguments["model"] = None
+            else:
+                normalized_arguments["model"] = None
             normalized_arguments["question"] = (
-                prompt if action_type == "answer_project_question" else None
+                _server_owned_question(prompt, context=context)
+                if action_type == "answer_project_question"
+                else None
             )
             if action_type == "generate_kolaudim":
                 latest_generation_id = str(action.get("id") or "") or None
@@ -175,6 +236,72 @@ def _apply_server_owned_fields(
             normalized_actions.append(action)
         normalized["actions"] = normalized_actions
     return normalized
+
+
+def _server_owned_question(
+    prompt: str,
+    *,
+    context: PromptPlanningContext,
+) -> str:
+    pending = context.pending_clarification
+    if pending is None:
+        return prompt
+    return (
+        f"Kërkesa fillestare: {pending.original_request}\n"
+        f"Sqarimi i përdoruesit: {prompt}"
+    )
+
+
+def _selected_clarification_option(
+    prompt: str,
+    *,
+    context: PromptPlanningContext,
+) -> str | None:
+    pending = context.pending_clarification
+    if pending is None or not pending.options:
+        return None
+    clean = " ".join(prompt.split()).strip()
+    if clean.isdigit():
+        index = int(clean) - 1
+        if 0 <= index < len(pending.options):
+            return pending.options[index]
+    for option in pending.options:
+        if clean.casefold() == option.casefold():
+            return option
+    return None
+
+
+def _infer_clarification_kind(
+    payload: dict[str, Any],
+    *,
+    context: PromptPlanningContext,
+) -> str:
+    question = str(payload.get("clarification_question") or "").casefold()
+    if any(word in question for word in ("projekt", "dosje")):
+        return "project"
+    if any(word in question for word in ("model", "provider", "ai")):
+        return "model"
+    if not any(project.is_active for project in context.projects) and context.projects:
+        return "project"
+    return "action"
+
+
+def _clarification_options(
+    kind: str,
+    *,
+    context: PromptPlanningContext,
+) -> list[str]:
+    if kind == "project":
+        return [project.name for project in context.projects][:8]
+    if kind == "model":
+        return list(dict.fromkeys(context.configured_models))[:8]
+    return [
+        "Menaxho projektin",
+        "Pyet dosjen teknike",
+        "Importo dokumente",
+        "Gjenero Akt Kolaudimi",
+        "Merr PDF-në e fundit",
+    ]
 
 
 def _is_structural_response_error(exc: LLMReviewError) -> bool:

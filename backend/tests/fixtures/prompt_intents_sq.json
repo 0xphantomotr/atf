@@ -1,0 +1,82 @@
+[
+  {
+    "utterance": "Shfaq projektet e mia",
+    "has_attachment": false,
+    "expected_actions": ["list_projects"]
+  },
+  {
+    "utterance": "Krijo projektin Vila Drita",
+    "has_attachment": false,
+    "expected_actions": ["create_project"]
+  },
+  {
+    "utterance": "Zgjidh projektin Vila Drita",
+    "has_attachment": false,
+    "expected_actions": ["select_project"]
+  },
+  {
+    "utterance": "Cili është projekti aktiv?",
+    "has_attachment": false,
+    "expected_actions": ["show_active_project"]
+  },
+  {
+    "utterance": "Ku ka arritur gjenerimi?",
+    "has_attachment": false,
+    "expected_actions": ["get_status"]
+  },
+  {
+    "utterance": "Ndrysho modelin në gemini-3.1-flash-lite",
+    "has_attachment": false,
+    "expected_actions": ["select_ai_model"]
+  },
+  {
+    "utterance": "Importo dosjen e bashkëngjitur",
+    "has_attachment": true,
+    "expected_actions": ["import_attachment"]
+  },
+  {
+    "utterance": "Gjenero Akt Kolaudimi",
+    "has_attachment": false,
+    "expected_actions": ["estimate_kolaudim", "generate_kolaudim"]
+  },
+  {
+    "utterance": "Gjenero Akt Kolaudimi dhe ma dërgo PDF-në",
+    "has_attachment": false,
+    "expected_actions": [
+      "estimate_kolaudim",
+      "generate_kolaudim",
+      "deliver_latest_report"
+    ]
+  },
+  {
+    "utterance": "Kush është sipërmarrësi sipas dosjes?",
+    "has_attachment": false,
+    "expected_actions": ["answer_project_question"]
+  },
+  {
+    "utterance": "Cila është leja e ndërtimit?",
+    "has_attachment": false,
+    "expected_actions": ["answer_project_question"]
+  },
+  {
+    "utterance": "Çfarë kërkon VKM 610/2022 për këtë dosje?",
+    "has_attachment": false,
+    "expected_actions": ["answer_project_question"]
+  },
+  {
+    "utterance": "Krijo projektin Vila, importo dosjen, gjenero Akt Kolaudimi dhe ma dërgo PDF-në",
+    "has_attachment": true,
+    "expected_actions": [
+      "create_project",
+      "import_attachment",
+      "estimate_kolaudim",
+      "generate_kolaudim",
+      "deliver_latest_report"
+    ]
+  },
+  {
+    "utterance": "Më dërgo raportin e fundit",
+    "has_attachment": false,
+    "expected_actions": ["deliver_latest_report"]
+  }
+]

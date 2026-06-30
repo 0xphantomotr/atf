@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -7,36 +8,48 @@ import pytest
 from pydantic import ValidationError
 
 from app.agents.llm import LLMReviewError
-from app.db.base import Base
 from app.db import models as db_models  # noqa: F401
-from app.prompting.planner import plan_prompt
+from app.db.base import Base
 from app.prompting.confirmation import (
     confirmation_callback_data,
     parse_confirmation_callback,
 )
+from app.prompting.context import QAFollowUpContext, clarification_message
 from app.prompting.generation import (
     format_generation_estimate,
     generation_estimate_fingerprint,
     report_output_matches_prompt_job,
 )
+from app.prompting.intents import detect_intent_hints
+from app.prompting.models import PromptRun
 from app.prompting.parsing import (
     format_prompt_parse_summary,
     summarize_prompt_parse_records,
 )
+from app.prompting.planner import plan_prompt
 from app.prompting.policy import PromptPolicyError, validate_prompt_plan
+from app.prompting.preview import format_plan_preview, is_quiet_question_plan
 from app.prompting.qa import (
     PROJECT_QA_SYSTEM_PROMPT,
     EvidenceItem,
     GroundedAnswerPayload,
     _chunk_evidence,
+    _dossier_evidence,
+    _in_scope_version_ids,
     _qa_user_content,
     format_project_answer,
     question_requests_law,
+    looks_like_follow_up_question,
     rank_evidence,
     verify_grounded_answer,
 )
-from app.prompting.models import PromptRun
+from app.prompting.quota import (
+    PromptQuotaError,
+    PromptQuotaUsage,
+    evaluate_prompt_quota,
+)
 from app.prompting.schemas import (
+    PromptClarificationContext,
     PromptPlan,
     PromptPlanningContext,
     PromptProjectContext,
@@ -46,11 +59,11 @@ from app.prompting.security import (
     contains_likely_secret,
     redact_likely_secrets,
 )
-from app.prompting.status import generation_prompt_controls_latest_job
 from app.prompting.service import (
     pending_prompt_notifications,
     queue_prompt_notification,
 )
+from app.prompting.status import generation_prompt_controls_latest_job
 
 
 def _plan_payload(actions: list[dict]) -> dict:
@@ -72,11 +85,17 @@ def _action(
     requires_confirmation: bool = False,
     job_ref: str | None = None,
     question: str | None = None,
+    model: str | None = None,
 ) -> dict:
     return {
         "id": f"step-{step}",
         "type": action_type,
-        "arguments": {"name": name, "question": question, "job_ref": job_ref},
+        "arguments": {
+            "name": name,
+            "model": model,
+            "question": question,
+            "job_ref": job_ref,
+        },
         "depends_on": depends_on or [],
         "requires_confirmation": requires_confirmation,
     }
@@ -503,6 +522,33 @@ def test_grounded_answer_forces_conflicted_certainty_and_server_sources() -> Non
     assert evidence.source_label in rendered
 
 
+def test_grounded_answer_adds_conflict_language_for_conflicted_sources() -> None:
+    evidence = EvidenceItem(
+        evidence_id="claim:conflicted",
+        kind="claim",
+        text="contractor: Rian Building SH.P.K.",
+        source_label="akti.docx, paragrafi 2",
+        is_conflicted=True,
+    )
+
+    payload = verify_grounded_answer(
+        GroundedAnswerPayload(
+            answer=(
+                "Sipërmarrësi është Rian Building SH.P.K. sipas "
+                f"{evidence.evidence_id}."
+            ),
+            certainty="documented",
+            evidence_ids=[evidence.evidence_id],
+            follow_up_suggestion=None,
+        ),
+        {evidence.evidence_id: evidence},
+    )
+
+    assert payload.certainty == "conflicted"
+    assert "variante të ndryshme" in payload.answer
+    assert evidence.evidence_id not in payload.answer
+
+
 def test_qa_evidence_is_untrusted_data_and_schema_cannot_return_actions() -> None:
     malicious = EvidenceItem(
         evidence_id="chunk:1",
@@ -600,6 +646,323 @@ def test_qa_ranking_prefers_matching_canonical_claims() -> None:
     assert [item.evidence_id for item in ranked] == ["claim:contractor"]
     assert question_requests_law("Çfarë kërkon VKM 610/2022 për këtë dosje?")
     assert not question_requests_law("Kush është sipërmarrësi?")
+
+
+def test_qa_ranking_matches_albanian_contract_date_follow_up() -> None:
+    contract_date = EvidenceItem(
+        evidence_id="claim:contract-date",
+        kind="claim",
+        text="contract_date: 18.11.2022",
+        source_label="kontrata-sipermarrjes.docx, paragrafi 3",
+        field_name="contract_date",
+        value="18.11.2022",
+        authority=3,
+    )
+    permit_date = EvidenceItem(
+        evidence_id="claim:permit-date",
+        kind="claim",
+        text="construction_permit_date: 07.03.2023",
+        source_label="leja.docx, paragrafi 2",
+        field_name="construction_permit_date",
+        value="07.03.2023",
+        authority=3,
+    )
+
+    ranked = rank_evidence(
+        "Kush është sipërmarrësi? Po cila është data e kontratës?",
+        [permit_date, contract_date],
+    )
+
+    assert ranked[0].evidence_id == "claim:contract-date"
+
+
+def test_qa_scope_excludes_foreign_project_versions() -> None:
+    target_version = uuid4()
+    foreign_version = uuid4()
+    scoped = _in_scope_version_ids(
+        {
+            "document_records": [
+                {
+                    "file_version_id": str(target_version),
+                    "role": "technical_evidence",
+                    "project_relation": "target_project",
+                },
+                {
+                    "file_version_id": str(foreign_version),
+                    "role": "foreign_project_reference",
+                    "project_relation": "foreign_project_reference",
+                },
+            ]
+        },
+        fallback={target_version, foreign_version},
+    )
+
+    assert scoped == {target_version}
+
+
+def test_dossier_evidence_supports_document_and_missing_field_questions() -> None:
+    version_id = uuid4()
+    evidence = _dossier_evidence(
+        {
+            "document_records": [
+                {
+                    "file_version_id": str(version_id),
+                    "filename": "2.0 Akt kontrolli Përfundimi i themeleve.docx",
+                    "document_type": "foundation_completion_control_act",
+                    "role": "technical_evidence",
+                    "project_relation": "target_project",
+                }
+            ],
+            "missing_core_fields": ["start_date", "completion_date"],
+            "conflicts": [],
+            "chronology": [],
+        }
+    )
+
+    ranked_documents = rank_evidence(
+        "Cilat dokumente provojnë përfundimin e themeleve?",
+        evidence,
+    )
+    ranked_missing = rank_evidence(
+        "Çfarë nuk rezulton e provuar nga dokumentet?",
+        evidence,
+    )
+
+    assert ranked_documents[0].evidence_id == f"dossier:document:{version_id}"
+    assert ranked_missing[0].evidence_id == "dossier:missing-core-fields"
+
+
+def test_albanian_prompt_intent_fixtures() -> None:
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "prompt_intents_sq.json"
+    fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    for fixture in fixtures:
+        assert detect_intent_hints(
+            fixture["utterance"],
+            has_attachment=fixture["has_attachment"],
+        ) == fixture["expected_actions"], fixture["utterance"]
+
+
+def test_planner_server_owns_clarification_kind_and_options() -> None:
+    def fake_request(**kwargs):
+        return {
+            "version": "prompt-plan-v1",
+            "language": "sq-AL",
+            "needs_clarification": True,
+            "clarification_question": "Cilin projekt dëshironi?",
+            "actions": [],
+        }, {}
+
+    result = plan_prompt(
+        "Përdor projektin dhe më trego lejen",
+        context=PromptPlanningContext(
+            projects=[
+                PromptProjectContext(name="Dosja A", is_active=False),
+                PromptProjectContext(name="Dosja B", is_active=False),
+            ],
+            has_ai_settings=True,
+        ),
+        ai_settings={"provider": "gemini", "model": "gemini-3.1-flash-lite"},
+        request_fn=fake_request,
+    )
+
+    assert result.plan.clarification_kind == "project"
+    assert result.plan.clarification_options == ["Dosja A", "Dosja B"]
+    assert "Përgjigjuni me /prompt" in clarification_message(
+        result.plan.clarification_question or "",
+        options=result.plan.clarification_options,
+    )
+
+
+def test_numbered_clarification_response_selects_server_option() -> None:
+    def fake_request(**kwargs):
+        return _plan_payload(
+            [_action("select_project", name="Model-invented project")]
+        ), {}
+
+    result = plan_prompt(
+        "2",
+        context=PromptPlanningContext(
+            projects=[
+                PromptProjectContext(name="Dosja A", is_active=False),
+                PromptProjectContext(name="Dosja B", is_active=False),
+            ],
+            has_ai_settings=True,
+            pending_clarification=PromptClarificationContext(
+                original_request="Zgjidh projektin dhe më trego lejen.",
+                kind="project",
+                question="Cilin projekt dëshironi?",
+                options=["Dosja A", "Dosja B"],
+            ),
+        ),
+        ai_settings={"provider": "gemini", "model": "gemini-3.1-flash-lite"},
+        request_fn=fake_request,
+    )
+
+    assert result.plan.actions[0].arguments.name == "Dosja B"
+
+
+def test_planner_preserves_exact_model_and_formats_preview() -> None:
+    def fake_request(**kwargs):
+        return _plan_payload(
+            [
+                _action(
+                    "select_ai_model",
+                    model="gemini-3.1-flash-lite",
+                )
+            ]
+        ), {}
+
+    result = plan_prompt(
+        "Përdor modelin gemini-3.1-flash-lite",
+        context=PromptPlanningContext(
+            projects=[],
+            has_ai_settings=True,
+            configured_models=["gemini-3.1-flash-lite"],
+        ),
+        ai_settings={"provider": "gemini", "model": "gemini-2.5-flash"},
+        request_fn=fake_request,
+    )
+    preview = format_plan_preview(result.plan)
+
+    assert result.plan.actions[0].arguments.model == "gemini-3.1-flash-lite"
+    assert "Ndrysho modelin AI: gemini-3.1-flash-lite" in preview
+
+
+def test_dossier_question_plan_uses_quiet_telegram_delivery() -> None:
+    direct = PromptPlan.model_validate(
+        _plan_payload(
+            [
+                _action(
+                    "answer_project_question",
+                    question="Kush është investitori?",
+                )
+            ]
+        )
+    )
+    selected_project = PromptPlan.model_validate(
+        _plan_payload(
+            [
+                _action("select_project", step=1, name="Dosja A"),
+                _action(
+                    "answer_project_question",
+                    step=2,
+                    question="Kush është investitori?",
+                    depends_on=["step-1"],
+                ),
+            ]
+        )
+    )
+    generation = PromptPlan.model_validate(
+        _plan_payload([_action("estimate_kolaudim")])
+    )
+
+    assert is_quiet_question_plan(direct)
+    assert is_quiet_question_plan(selected_project)
+    assert not is_quiet_question_plan(generation)
+
+
+def test_model_selection_must_precede_dependent_ai_action() -> None:
+    valid = PromptPlan.model_validate(
+        _plan_payload(
+            [
+                _action(
+                    "select_ai_model",
+                    step=1,
+                    model="gemini-3.1-flash-lite",
+                ),
+                _action(
+                    "answer_project_question",
+                    step=2,
+                    question="Kush është investitori?",
+                    depends_on=["step-1"],
+                ),
+            ]
+        )
+    )
+    validate_prompt_plan(valid)
+
+    invalid = valid.model_copy(deep=True)
+    invalid.actions[1].depends_on = []
+    with pytest.raises(PromptPolicyError) as dependency_error:
+        validate_prompt_plan(invalid)
+    assert dependency_error.value.code in {
+        "question_model_dependency_missing",
+        "ai_action_model_dependency_missing",
+    }
+
+
+def test_follow_up_context_is_bounded_and_not_treated_as_evidence() -> None:
+    context = QAFollowUpContext(
+        question="Kush është sipërmarrësi?",
+        answer="Sipërmarrësi rezulton EB-2000 sh.p.k.",
+        certainty="documented",
+        evidence_ids=["claim:old"],
+        follow_up_suggestion="Dëshironi datën e kontratës së sipërmarrësit?",
+    )
+    evidence = EvidenceItem(
+        evidence_id="claim:current",
+        kind="claim",
+        text="Data e kontratës: 01.02.2024",
+        source_label="kontrata.docx, paragrafi 3",
+    )
+    packet = json.loads(
+        _qa_user_content(
+            "Po data e kontratës?",
+            [evidence],
+            follow_up_context=context,
+        )
+    )
+
+    assert looks_like_follow_up_question("Po data e kontratës?")
+    assert looks_like_follow_up_question("po")
+    assert not looks_like_follow_up_question("Cila është leja e ndërtimit?")
+    assert packet["conversation_context"]["previous_question"] == context.question
+    assert (
+        packet["conversation_context"]["previous_follow_up_suggestion"]
+        == context.follow_up_suggestion
+    )
+    assert packet["evidence"][0]["evidence_id"] == "claim:current"
+    assert "claim:old" not in json.dumps(packet["evidence"])
+
+
+def test_prompt_quota_boundaries_are_configurable() -> None:
+    evaluate_prompt_quota(
+        PromptQuotaUsage(
+            requests_in_window=6,
+            requests_in_day=100,
+            ai_tokens_in_day=249_999,
+        ),
+        max_requests_per_window=6,
+        max_requests_per_day=100,
+        max_ai_tokens_per_day=250_000,
+    )
+
+    with pytest.raises(PromptQuotaError) as rate_error:
+        evaluate_prompt_quota(
+            PromptQuotaUsage(
+                requests_in_window=7,
+                requests_in_day=7,
+                ai_tokens_in_day=0,
+            ),
+            max_requests_per_window=6,
+            max_requests_per_day=100,
+            max_ai_tokens_per_day=250_000,
+        )
+    assert rate_error.value.code == "prompt_rate_limited"
+
+    with pytest.raises(PromptQuotaError) as token_error:
+        evaluate_prompt_quota(
+            PromptQuotaUsage(
+                requests_in_window=1,
+                requests_in_day=10,
+                ai_tokens_in_day=250_000,
+            ),
+            max_requests_per_window=6,
+            max_requests_per_day=100,
+            max_ai_tokens_per_day=250_000,
+        )
+    assert token_error.value.code == "prompt_daily_token_quota"
 
 
 def test_planner_does_not_retry_provider_failures() -> None:

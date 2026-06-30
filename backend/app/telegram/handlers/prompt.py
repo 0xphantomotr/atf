@@ -21,10 +21,19 @@ from app.prompting.confirmation import (
     cancel_latest_waiting_confirmation,
     confirm_generation,
 )
+from app.prompting.context import (
+    cancel_pending_clarification,
+    clarification_message,
+    load_pending_clarification,
+    load_recent_prompt_turns,
+    resolve_pending_clarification,
+)
 from app.prompting.executor import PromptExecutionError, execute_prompt_plan
 from app.prompting.generation import plan_requires_background
 from app.prompting.planner import PromptPlanningError, plan_prompt
 from app.prompting.policy import PromptPolicyError, validate_prompt_plan
+from app.prompting.preview import format_plan_preview, is_quiet_question_plan
+from app.prompting.quota import PromptQuotaError, enforce_prompt_quota
 from app.prompting.schemas import (
     PromptPlanningContext,
     PromptProjectContext,
@@ -54,10 +63,12 @@ PROMPT_HELP = (
     "/prompt Zgjidh projektin Test Dosja Teknike\n"
     "/prompt Cili është projekti aktiv?\n"
     "/prompt Shfaq statusin\n"
+    "/prompt Përdor modelin gemini-3.1-flash-lite\n"
     "/prompt Kush është sipërmarrësi sipas dosjes aktive?\n\n"
     "Me attachment:\n"
     "/prompt Krijo projektin Test, importo dosjen, gjenero Akt-Kolaudimin "
     "dhe ma dërgo PDF-në\n\n"
+    "Për pyetje pasuese ose sqarime, përdorni përsëri /prompt.\n"
     "API key vendoset vetëm me /ai_key dhe jo brenda /prompt."
 )
 
@@ -87,6 +98,18 @@ async def prompt_command(
             original_prompt=safe_prompt,
         )
         if not created:
+            return
+
+        try:
+            await enforce_prompt_quota(session, user_id=user.id)
+        except PromptQuotaError as exc:
+            await prompting_service.fail_prompt_run(
+                session,
+                run_id=run.id,
+                code=exc.code,
+                detail=exc.user_message,
+            )
+            await message.answer(exc.user_message)
             return
 
         if contains_likely_secret(prompt_text):
@@ -183,6 +206,23 @@ async def prompt_command(
 
         projects = await projects_service.list_projects(session, user_id=user.id)
         active_project = await get_active_project(session, user_id=user.id)
+        pending_run, pending_clarification = await load_pending_clarification(
+            session,
+            user_id=user.id,
+            telegram_chat_id=message.chat.id,
+            exclude_run_id=run.id,
+        )
+        recent_turns = await load_recent_prompt_turns(
+            session,
+            user_id=user.id,
+            telegram_chat_id=message.chat.id,
+            project_id=active_project.id if active_project else None,
+            exclude_run_id=run.id,
+        )
+        configured_models = [str(ai_settings.get("model") or "")]
+        stage_models = ai_settings.get("stage_models")
+        if isinstance(stage_models, dict):
+            configured_models.extend(str(value) for value in stage_models.values())
         context = PromptPlanningContext(
             projects=[
                 PromptProjectContext(
@@ -193,6 +233,11 @@ async def prompt_command(
             ],
             has_ai_settings=True,
             has_attachment=has_attachment,
+            configured_models=[
+                value for value in dict.fromkeys(configured_models) if value
+            ][:8],
+            recent_turns=recent_turns,
+            pending_clarification=pending_clarification,
         )
 
         try:
@@ -214,30 +259,37 @@ async def prompt_command(
                 model=str(ai_settings["model"]),
                 token_usage=planner_result.token_usage,
             )
+            if pending_run is not None:
+                await resolve_pending_clarification(
+                    session,
+                    pending_run=pending_run,
+                    resolved_by_run_id=run.id,
+                )
             if planner_result.plan.needs_clarification:
                 await message.answer(
-                    planner_result.plan.clarification_question
-                    or "Ju lutem sqaroni kërkesën."
+                    clarification_message(
+                        planner_result.plan.clarification_question
+                        or "Ju lutem sqaroni kërkesën.",
+                        options=planner_result.plan.clarification_options,
+                    )
                 )
                 return
+
+            quiet_question = is_quiet_question_plan(planner_result.plan)
+            if not quiet_question:
+                await message.answer(format_plan_preview(planner_result.plan))
 
             if plan_requires_background(planner_result.plan):
                 from app.workers.jobs import run_prompt_workflow
 
                 run_prompt_workflow.send(str(run.id))
+                if quiet_question:
+                    return
                 if has_attachment:
                     queued_message = (
                         "Kërkesa u vendos në radhë.\n\n"
                         "Attachment-i u ruajt dhe do të importohet në projekt. "
                         "Pas leximit do të merrni vlerësimin dhe konfirmimin e gjenerimit."
-                    )
-                elif any(
-                    action.type == "answer_project_question"
-                    for action in planner_result.plan.actions
-                ):
-                    queued_message = (
-                        "Pyetja u vendos në radhë. Po kërkoj vetëm në versionet aktuale "
-                        "të dosjes së projektit aktiv."
                     )
                 else:
                     queued_message = (
@@ -393,8 +445,20 @@ async def cancel_prompt_generation_command(message: Message) -> None:
             user_id=user.id,
             telegram_chat_id=message.chat.id,
         )
+        clarification_cancelled = False
+        if result is None:
+            clarification_cancelled = await cancel_pending_clarification(
+                session,
+                user_id=user.id,
+                telegram_chat_id=message.chat.id,
+            )
     if result is None:
-        await message.answer("Nuk ka një gjenerim /prompt në pritje për konfirmim.")
+        if clarification_cancelled:
+            await message.answer("Sqarimi në pritje u anulua.")
+            return
+        await message.answer(
+            "Nuk ka gjenerim ose sqarim /prompt në pritje për anulim."
+        )
         return
     await message.answer(result.message)
 

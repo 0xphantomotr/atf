@@ -20,11 +20,15 @@ PromptActionType = Literal[
     "generate_kolaudim",
     "deliver_latest_report",
     "answer_project_question",
+    "select_ai_model",
 ]
+
+PromptClarificationKind = Literal["project", "model", "action"]
 
 
 class PromptActionArguments(StrictModel):
     name: str | None = Field(default=None, max_length=255)
+    model: str | None = Field(default=None, max_length=255)
     question: str | None = Field(default=None, max_length=3_000)
     job_ref: str | None = Field(
         default=None,
@@ -40,6 +44,16 @@ class PromptActionArguments(StrictModel):
         normalized = " ".join(value.split())
         if not normalized:
             raise ValueError("Project name cannot be empty.")
+        return normalized
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("AI model name cannot be empty.")
         return normalized
 
     @field_validator("question")
@@ -67,6 +81,10 @@ class PromptAction(StrictModel):
             raise ValueError(f"{self.type} requires a project name.")
         if self.type not in project_name_actions and self.arguments.name is not None:
             raise ValueError(f"{self.type} does not accept a project name.")
+        if self.type == "select_ai_model" and self.arguments.model is None:
+            raise ValueError("select_ai_model requires a model name.")
+        if self.type != "select_ai_model" and self.arguments.model is not None:
+            raise ValueError(f"{self.type} does not accept a model name.")
         if self.type == "answer_project_question" and self.arguments.question is None:
             raise ValueError("answer_project_question requires a question.")
         if self.type != "answer_project_question" and self.arguments.question is not None:
@@ -81,6 +99,8 @@ class PromptPlan(StrictModel):
     language: Literal["sq-AL"]
     needs_clarification: bool
     clarification_question: str | None = Field(max_length=500)
+    clarification_kind: PromptClarificationKind | None = None
+    clarification_options: list[str] = Field(default_factory=list, max_length=8)
     actions: list[PromptAction] = Field(max_length=8)
 
     @model_validator(mode="after")
@@ -88,12 +108,16 @@ class PromptPlan(StrictModel):
         if self.needs_clarification:
             if not self.clarification_question:
                 raise ValueError("A clarification question is required.")
+            if self.clarification_kind is None:
+                raise ValueError("A clarification kind is required.")
             if self.actions:
                 raise ValueError("A clarification plan cannot contain executable actions.")
         elif not self.actions:
             raise ValueError("An executable plan must contain at least one action.")
         elif self.clarification_question is not None:
             raise ValueError("Executable plans cannot include a clarification question.")
+        elif self.clarification_kind is not None or self.clarification_options:
+            raise ValueError("Executable plans cannot include clarification metadata.")
         return self
 
 
@@ -102,10 +126,25 @@ class PromptProjectContext(StrictModel):
     is_active: bool
 
 
+class PromptRecentTurn(StrictModel):
+    request: str = Field(max_length=500)
+    action_types: list[str] = Field(max_length=8)
+
+
+class PromptClarificationContext(StrictModel):
+    original_request: str = Field(max_length=1_500)
+    kind: PromptClarificationKind
+    question: str = Field(max_length=500)
+    options: list[str] = Field(default_factory=list, max_length=8)
+
+
 class PromptPlanningContext(StrictModel):
     projects: list[PromptProjectContext]
     has_ai_settings: bool
     has_attachment: bool = False
+    configured_models: list[str] = Field(default_factory=list, max_length=8)
+    recent_turns: list[PromptRecentTurn] = Field(default_factory=list, max_length=5)
+    pending_clarification: PromptClarificationContext | None = None
 
 
 class PromptActionResult(StrictModel):
