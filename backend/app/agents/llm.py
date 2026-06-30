@@ -87,6 +87,14 @@ SPECIALIST_PROMPT_OVERHEAD_TOKENS = 1_000
 MIN_LONG_FORM_TIMEOUT_SECONDS = 90
 MAX_LONG_FORM_TIMEOUT_SECONDS = 300
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+GROQ_STRICT_JSON_SCHEMA_MODELS = {
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+}
+GROQ_BEST_EFFORT_JSON_SCHEMA_MODELS = {
+    "openai/gpt-oss-safeguard-20b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+}
 
 
 DOCUMENT_ANALYSIS_SCHEMA: dict[str, Any] = {
@@ -829,7 +837,27 @@ def _schema_response_format(
     schema_name: str,
     schema: dict[str, Any],
 ) -> dict[str, Any]:
-    if ai_settings.get("provider") == "groq":
+    provider = str(ai_settings.get("provider") or "").strip().lower()
+    model = str(ai_settings.get("model") or "").strip()
+    if provider == "groq":
+        if model in GROQ_STRICT_JSON_SCHEMA_MODELS:
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": _groq_strict_schema(schema),
+                },
+            }
+        if model in GROQ_BEST_EFFORT_JSON_SCHEMA_MODELS:
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": False,
+                    "schema": schema,
+                },
+            }
         return {"type": "json_object"}
 
     return {
@@ -840,6 +868,35 @@ def _schema_response_format(
             "schema": schema,
         },
     }
+
+
+def _groq_strict_schema(value: Any) -> Any:
+    """Normalize Pydantic JSON Schema to Groq strict-output requirements."""
+    if isinstance(value, list):
+        return [_groq_strict_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    omitted_keys = {
+        "const",
+        "default",
+        "maxItems",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "pattern",
+        "title",
+    }
+    normalized = {
+        key: _groq_strict_schema(item)
+        for key, item in value.items()
+        if key not in omitted_keys
+    }
+    properties = normalized.get("properties")
+    if isinstance(properties, dict):
+        normalized["additionalProperties"] = False
+        normalized["required"] = list(properties)
+    return normalized
 
 
 def _parse_document_analysis_response(

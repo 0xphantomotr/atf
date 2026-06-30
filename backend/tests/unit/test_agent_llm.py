@@ -7,6 +7,7 @@ from app.agents.llm import (
     _parse_model_json_object,
     _post_json,
     _response_format,
+    _schema_response_format,
     document_analysis_reasoning_effort,
     kolaudim_draft_input_token_budget,
     kolaudim_draft_max_output_tokens,
@@ -140,6 +141,41 @@ def test_response_format_uses_json_object_for_groq() -> None:
     assert _response_format({"provider": "groq"}) == {"type": "json_object"}
 
 
+def test_response_format_uses_strict_schema_for_groq_gpt_oss() -> None:
+    response_format = _schema_response_format(
+        {"provider": "groq", "model": "openai/gpt-oss-20b"},
+        schema_name="test_schema",
+        schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "note": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                },
+            },
+            "required": ["name"],
+        },
+    )
+
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    strict_schema = response_format["json_schema"]["schema"]
+    assert strict_schema["required"] == ["name", "note"]
+    assert strict_schema["additionalProperties"] is False
+    assert "default" not in strict_schema["properties"]["note"]
+
+
+def test_response_format_keeps_json_object_for_unsupported_groq_model() -> None:
+    response_format = _schema_response_format(
+        {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+        schema_name="test_schema",
+        schema={"type": "object", "properties": {}},
+    )
+
+    assert response_format == {"type": "json_object"}
+
+
 def test_response_format_uses_strict_schema_for_gemini() -> None:
     response_format = _response_format({"provider": "gemini"})
 
@@ -235,7 +271,8 @@ def test_request_senior_review_adds_output_shape_to_prompt(monkeypatch) -> None:
 
     user_payload = json.loads(captured["body"]["messages"][1]["content"])
     assert captured["path"] == "/chat/completions"
-    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert captured["body"]["response_format"]["type"] == "json_schema"
+    assert captured["body"]["response_format"]["json_schema"]["strict"] is True
     assert "required_output_shape" in user_payload
     assert user_payload["audit_input"]["project"]["name"] == "Test"
     assert review["status"] == "reviewed"
@@ -475,7 +512,8 @@ def test_request_kolaudim_draft_adds_output_shape_to_prompt(monkeypatch) -> None
 
     user_payload = json.loads(captured["body"]["messages"][1]["content"])
     assert captured["path"] == "/chat/completions"
-    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert captured["body"]["response_format"]["type"] == "json_schema"
+    assert captured["body"]["response_format"]["json_schema"]["strict"] is True
     assert captured["body"]["max_tokens"] <= 1800
     assert captured["post_kwargs"]["retry_transient"] is True
     assert captured["post_kwargs"]["timeout_seconds"] >= 90
