@@ -46,7 +46,11 @@ def build_claim_evidence_catalog(
             supporting_ids = field_evidence_ids.get(field, [])
             catalog[evidence_id] = {
                 "evidence_id": evidence_id,
-                "kind": "canonical_fact",
+                "kind": (
+                    "user_confirmation"
+                    if fact.get("user_confirmed") is True
+                    else "canonical_fact"
+                ),
                 "field_name": field,
                 "value": fact.get("value"),
                 "confidence_level": fact.get("confidence_level"),
@@ -181,6 +185,7 @@ def evidence_is_current(
         "verified_law_reference",
         "canonical_conflict",
         "integrity_issue",
+        "user_confirmation",
     }:
         return True
     if not current_version_ids:

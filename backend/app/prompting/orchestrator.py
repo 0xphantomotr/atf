@@ -13,6 +13,7 @@ from app.prompting.confirmation import (
     PromptConfirmationError,
     prepare_generation_confirmation,
 )
+from app.prompting.context import clarification_message
 from app.prompting.executor import PromptExecutionError, execute_prompt_action
 from app.prompting.models import PromptRun
 from app.prompting.parsing import (
@@ -259,6 +260,11 @@ async def _advance_document_wait(
             summary,
             project_name=project.name,
             skipped_count=int(import_data.get("skipped_count") or 0),
+            skipped_files=(
+                [dict(item) for item in import_data.get("skipped", []) if isinstance(item, dict)]
+                if isinstance(import_data.get("skipped"), list)
+                else []
+            ),
             source_label=(
                 "Google Drive" if import_data.get("drive_folder_id") else "attachment"
             ),
@@ -291,6 +297,32 @@ async def _advance_review_wait(
             "review_job_project_mismatch",
             "Gjenerimi nuk i përket projektit të kësaj kërkese.",
         )
+    if job.status == "needs_user_input":
+        issues = (job.progress_details or {}).get("input_issues")
+        issue = next(
+            (item for item in issues or [] if isinstance(item, dict)),
+            None,
+        )
+        if issue is None:
+            raise PromptExecutionError(
+                "review_input_issue_missing",
+                "Gjenerimi kërkon sqarim, por pyetja nuk mund të ndërtohej.",
+            )
+        question, options = _review_input_question(issue)
+        prompting_service.queue_prompt_notification(
+            run,
+            key=f"review_input_{job.id}_{issue.get('field')}",
+            body=clarification_message(question, options=options),
+        )
+        await prompting_service.mark_prompt_run_waiting_for_review_input(
+            session,
+            run=run,
+            review_job_id=job.id,
+            issue=issue,
+            question=question,
+            options=options,
+        )
+        return PromptAdvanceResult()
     if job.status == "failed":
         raise PromptExecutionError(
             "review_job_failed",
@@ -429,3 +461,48 @@ def _review_poll_delay(retry_after_at: datetime | None) -> int:
         retry_after_at = retry_after_at.replace(tzinfo=timezone.utc)
     remaining = max(1, int((retry_after_at - datetime.now(timezone.utc)).total_seconds()))
     return min(remaining + 2, 300)
+
+
+def _review_input_question(issue: dict) -> tuple[str, list[str]]:
+    field = str(issue.get("field") or "e dhëna")
+    labels = {
+        "construction_permit_number": "numri i lejes së ndërtimit",
+        "construction_permit_protocol": "protokolli i lejes së ndërtimit",
+        "construction_permit_date": "data e lejes së ndërtimit",
+        "development_permit_number": "numri i lejes së zhvillimit",
+        "development_permit_protocol": "protokolli i lejes së zhvillimit",
+        "development_permit_date": "data e lejes së zhvillimit",
+        "investor": "investitori",
+        "contractor": "sipërmarrësi",
+        "supervisor": "mbikëqyrësi",
+        "kolaudator": "kolaudatori",
+    }
+    label = labels.get(field, field.replace("_", " "))
+    options = []
+    for key in ("selected_value", "alternative_value", "required_value"):
+        value = " ".join(str(issue.get(key) or "").split()).strip()
+        if value and value not in options:
+            options.append(value)
+    sources = []
+    for key in ("selected_source_documents", "alternative_source_documents", "source_documents"):
+        raw = issue.get(key)
+        if isinstance(raw, list):
+            sources.extend(str(item) for item in raw if str(item).strip())
+    source_note = ""
+    if sources:
+        source_note = "\n\nBurime në konflikt:\n" + "\n".join(
+            f"- {_clip_review_input(source, 95)}"
+            for source in list(dict.fromkeys(sources))[:4]
+        )
+    question = (
+        f"Dosja nuk përcakton pa konflikt {label}. "
+        "Cila vlerë duhet përdorur në Akt-Kolaudim?"
+        f"{source_note}"
+    )
+    return _clip_review_input(question, 500), options[:4]
+
+
+def _clip_review_input(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"

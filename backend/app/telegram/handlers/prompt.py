@@ -27,6 +27,7 @@ from app.prompting.context import (
     load_pending_clarification,
     load_recent_prompt_turns,
     resolve_pending_clarification,
+    resolve_review_fact_clarification,
 )
 from app.prompting.executor import PromptExecutionError, execute_prompt_plan
 from app.prompting.generation import plan_requires_background
@@ -214,6 +215,36 @@ async def prompt_command(
             telegram_chat_id=message.chat.id,
             exclude_run_id=run.id,
         )
+        if (
+            pending_run is not None
+            and isinstance(pending_run.pending_clarification, dict)
+            and pending_run.pending_clarification.get("kind") == "review_fact"
+        ):
+            try:
+                field, value = await resolve_review_fact_clarification(
+                    session,
+                    pending_run=pending_run,
+                    response_run=run,
+                    response=prompt_text,
+                )
+            except ValueError as exc:
+                await prompting_service.fail_prompt_run(
+                    session,
+                    run_id=run.id,
+                    code="review_fact_clarification_invalid",
+                    detail=str(exc),
+                )
+                await message.answer(str(exc))
+                return
+            from app.workers.jobs import run_prompt_workflow
+
+            run_prompt_workflow.send(str(pending_run.id))
+            await message.answer(
+                "Sqarimi u ruajt dhe gjenerimi rifilloi.\n\n"
+                f"Fusha: {field.replace('_', ' ')}\n"
+                f"Vlera: {value}"
+            )
+            return
         recent_turns = await load_recent_prompt_turns(
             session,
             user_id=user.id,

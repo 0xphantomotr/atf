@@ -780,6 +780,10 @@ def classify_document(filename: str, text: str | None) -> ClassificationResult:
     if filename_match is not None:
         return filename_match
 
+    explicit_permit = _explicit_permit_header(normalized_text[:3_000])
+    if explicit_permit is not None:
+        return explicit_permit
+
     return _best_signature_result(
         BODY_SIGNATURES,
         normalized_text[:CLASSIFICATION_TEXT_LIMIT],
@@ -788,6 +792,25 @@ def classify_document(filename: str, text: str | None) -> ClassificationResult:
         confidence=0.0,
         evidence=None,
     )
+
+
+def _explicit_permit_header(text: str) -> ClassificationResult | None:
+    official_markers = ("i jepet", "zhvilluesit", "leja e ndertimit per punimet")
+    if "leje ndertimi" in text and any(marker in text for marker in official_markers):
+        return ClassificationResult(
+            document_type="construction_permit",
+            confidence=0.99,
+            evidence="explicit official construction permit header",
+        )
+    if "leje zhvillimi" in text and any(
+        marker in text for marker in ("i jepet", "zhvilluesit", "vendim")
+    ):
+        return ClassificationResult(
+            document_type="development_permit",
+            confidence=0.99,
+            evidence="explicit official development permit header",
+        )
+    return None
 
 
 def _best_signature_result(

@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from collections import Counter
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai import service as ai_service
 from app.agents.llm import AIQuotaLimitError
 from app.agents.graph import run_audit_graph
+from app.agents.nodes.kolaudim_corrector import ClaimVerificationError
 from app.agents.state import AuditGraphState
 from app.core.config import settings
 from app.document_analysis.service import (
@@ -42,6 +44,7 @@ JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 PDF_CONTENT_TYPE = "application/pdf"
 AGENT_TEXT_EXCERPT_LIMIT = 20_000
 QUOTA_WAITING_STATUS = "waiting_for_quota"
+USER_INPUT_WAITING_STATUS = "needs_user_input"
 DEFAULT_QUOTA_RETRY_SECONDS = 15 * 60
 MAX_QUOTA_RETRY_SECONDS = 24 * 60 * 60
 
@@ -255,6 +258,63 @@ def _enqueue_review_job(job: ReviewJob) -> None:
     run_review_job.send(str(job.id))
 
 
+async def resume_review_job_with_fact_override(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+    field: str,
+    value: str,
+    enqueue: bool = True,
+) -> ReviewJob:
+    job = await session.get(ReviewJob, job_id)
+    if job is None or job.requested_by != user_id:
+        raise ValueError("Gjenerimi në pritje nuk u gjet.")
+    if job.status != USER_INPUT_WAITING_STATUS:
+        raise ValueError("Gjenerimi nuk është në pritje të të dhënave.")
+    normalized_field = field.strip()
+    normalized_value = " ".join(value.split()).strip(" ;")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", normalized_field):
+        raise ValueError("Fusha që kërkon sqarim nuk është e vlefshme.")
+    if not 1 < len(normalized_value) <= 280:
+        raise ValueError("Vlera duhet të ketë nga 2 deri në 280 karaktere.")
+
+    payload: dict[str, Any]
+    try:
+        decoded = json.loads(job.user_prompt or "{}")
+        payload = dict(decoded) if isinstance(decoded, dict) else {}
+    except json.JSONDecodeError:
+        payload = {"original_request": job.user_prompt} if job.user_prompt else {}
+    overrides = dict(payload.get("fact_overrides") or {})
+    overrides[normalized_field] = normalized_value
+    payload["fact_overrides"] = overrides
+    payload["fact_override_source"] = "telegram_user_confirmation"
+    job.user_prompt = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    job.status = "queued"
+    job.progress = 50
+    job.current_stage = "queued"
+    job.error_message = None
+    job.completed_at = None
+    job.progress_details = {
+        **dict(job.progress_details or {}),
+        "stage": "queued",
+        "resolved_input": {"field": normalized_field, "value": normalized_value},
+        "input_issues": [],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if enqueue:
+        await session.commit()
+        await session.refresh(job)
+        _enqueue_review_job(job)
+    else:
+        await session.flush()
+    return job
+
+
+def enqueue_review_job(job: ReviewJob) -> None:
+    _enqueue_review_job(job)
+
+
 async def estimate_review_job(
     session: AsyncSession,
     *,
@@ -300,7 +360,7 @@ async def run_queued_review_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Procesi i auditimit nuk u gjet.",
         )
-    if job.status in {"completed", "failed"}:
+    if job.status in {"completed", "failed", USER_INPUT_WAITING_STATUS}:
         return job
     now = datetime.now(timezone.utc)
     if (
@@ -463,6 +523,36 @@ async def run_queued_review_job(
         job.retry_reason = None
         job.completed_at = datetime.now(timezone.utc)
         await session.commit()
+    except ClaimVerificationError as exc:
+        recoverable_issues = _recoverable_user_input_issues(exc.issues)
+        if recoverable_issues:
+            await session.rollback()
+            job = await session.get(ReviewJob, job_id)
+            if job is None:
+                raise
+            job.status = USER_INPUT_WAITING_STATUS
+            job.progress = min(99, max(job.progress, 90))
+            job.current_stage = USER_INPUT_WAITING_STATUS
+            job.error_message = None
+            job.progress_details = {
+                **dict(job.progress_details or {}),
+                "stage": USER_INPUT_WAITING_STATUS,
+                "input_issues": recoverable_issues,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            job.completed_at = None
+            await session.commit()
+            return job
+        await session.rollback()
+        job = await session.get(ReviewJob, job_id)
+        if job is not None:
+            job.status = "failed"
+            job.progress = 100
+            job.current_stage = "failed"
+            job.error_message = str(exc)
+            job.completed_at = datetime.now(timezone.utc)
+            await session.commit()
+        raise
     except Exception as exc:
         quota_error = _quota_error_from_exception(exc)
         if quota_error is not None:
@@ -489,6 +579,19 @@ async def run_queued_review_job(
 
     await session.refresh(job)
     return job
+
+
+def _recoverable_user_input_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    recoverable_codes = {
+        "PUBLIC-CONFLICT-ALTERNATIVE-USED",
+        "PUBLIC-DETAIL-MISSING",
+    }
+    return [
+        dict(issue)
+        for issue in issues
+        if str(issue.get("code") or "") in recoverable_codes
+        and str(issue.get("field") or "").strip()
+    ][:8]
 
 
 async def _set_job_progress(
@@ -973,6 +1076,7 @@ def _build_agent_state(
             "law_scope": _law_scope_codes(job),
         },
         "user_prompt": job.user_prompt or "",
+        "user_fact_overrides": _job_fact_overrides(job),
         "documents": [_current_file_as_dict(current_file) for current_file in current_files],
         "document_analyses": document_analyses or [],
         "rules": [_rule_context_as_dict(context) for context in rule_contexts],
@@ -984,14 +1088,43 @@ def _build_agent_state(
     }
 
 
+def _job_fact_overrides(job: ReviewJob) -> dict[str, str]:
+    try:
+        payload = json.loads(job.user_prompt or "{}")
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict) or not isinstance(payload.get("fact_overrides"), dict):
+        return {}
+    return {
+        str(field): " ".join(str(value).split())[:280]
+        for field, value in payload["fact_overrides"].items()
+        if re.fullmatch(r"[a-z][a-z0-9_]{1,127}", str(field))
+        and str(value).strip()
+    }
+
+
 def _current_file_as_dict(current_file: CurrentFileSnapshot) -> dict[str, Any]:
+    classification = classify_document(
+        current_file.original_filename,
+        current_file.text_content,
+    )
+    stored_confidence = current_file.classification_confidence or 0.0
+    use_runtime_classification = classification.confidence > stored_confidence
     return {
         "file_id": str(current_file.file_id),
         "version_id": str(current_file.version_id),
         "original_filename": current_file.original_filename,
         "parse_status": current_file.parse_status,
-        "document_type": current_file.document_type,
-        "classification_confidence": current_file.classification_confidence,
+        "document_type": (
+            classification.document_type
+            if use_runtime_classification
+            else current_file.document_type
+        ),
+        "classification_confidence": (
+            classification.confidence
+            if use_runtime_classification
+            else current_file.classification_confidence
+        ),
         "sha256_hash": current_file.sha256_hash,
         "text_excerpt": _text_excerpt(current_file.text_content),
     }

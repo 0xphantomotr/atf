@@ -10,6 +10,7 @@ from app.agents.dossier_consolidation import (
     REGISTER_TECHNICAL,
     canonical_field_name,
     consolidate_project_registers,
+    contextual_claim_field_name,
 )
 
 
@@ -456,6 +457,19 @@ def test_canonical_field_aliases_are_project_agnostic() -> None:
     assert canonical_field_name("contractor_name_text") == "contractor"
     assert canonical_field_name("supervisor_name_text") == "supervisor"
     assert canonical_field_name("kolaudator_name_text") == "kolaudator"
+
+
+def test_generic_permit_fields_use_the_named_permit_type() -> None:
+    assert contextual_claim_field_name(
+        "permit_number",
+        evidence_text="LEJE ZHVILLIMI Nr. 13",
+        document_type="development_permit",
+    ) == "development_permit_number"
+    assert contextual_claim_field_name(
+        "permit_number",
+        evidence_text="LEJE NDËRTIMI Nr. 274",
+        document_type="construction_permit",
+    ) == "construction_permit_number"
     assert canonical_field_name("Total Construction Area") == "total_construction_area"
     assert canonical_field_name("emri_objektit") == "object_name"
     assert canonical_field_name("sipermarresi") == "contractor"

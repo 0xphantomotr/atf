@@ -249,6 +249,30 @@ def canonical_field_name(value: object) -> str:
     return FIELD_ALIASES.get(normalized, normalized)
 
 
+def contextual_claim_field_name(
+    value: object,
+    *,
+    evidence_text: str,
+    document_type: str,
+) -> str:
+    """Resolve generic permit fields using the evidence that names the permit type."""
+    normalized = _normalize_key(value)
+    permit_suffix = {
+        "permit_number": "number",
+        "permit_protocol": "protocol",
+        "permit_date": "date",
+    }.get(normalized)
+    if permit_suffix is None:
+        return canonical_field_name(value)
+
+    context = _normalize_value(evidence_text)
+    if document_type == "development_permit" or "leje zhvillimi" in context:
+        return f"development_permit_{permit_suffix}"
+    if document_type == "construction_permit" or "leje ndertimi" in context:
+        return f"construction_permit_{permit_suffix}"
+    return canonical_field_name(value)
+
+
 def consolidate_project_registers(
     *,
     analyses: object,
@@ -366,7 +390,14 @@ def _merge_claim_into_registers(
     ]
     if not evidence:
         return
-    field = canonical_field_name(claim.get("field_name"))
+    evidence_text = " ".join(
+        _clean_value(item.get("supporting_excerpt")) for item in evidence[:6]
+    )
+    field = contextual_claim_field_name(
+        claim.get("field_name"),
+        evidence_text=evidence_text,
+        document_type=str(document.get("document_type") or ""),
+    )
     category = _normalize_key(claim.get("category")) or "other"
     value = _clean_value(claim.get("original_value"))
     normalized_value = _clean_value(claim.get("normalized_value"))
@@ -377,9 +408,7 @@ def _merge_claim_into_registers(
         category=category,
         document_type=str(document.get("document_type") or ""),
         value=value,
-        evidence_text=" ".join(
-            _clean_value(item.get("supporting_excerpt")) for item in evidence[:6]
-        ),
+        evidence_text=evidence_text,
     ):
         return
 
@@ -578,11 +607,19 @@ def permit_claim_has_context(
 ) -> bool:
     if field not in PERMIT_FIELDS:
         return True
+    context = _normalize_value(f"{value} {evidence_text}")
+    if (
+        document_type == "construction_permit"
+        and "leje ndertimi" in context
+    ) or (
+        document_type == "development_permit"
+        and "leje zhvillimi" in context
+    ):
+        return True
     if permit_value_is_bare_reference(value):
         return _has_rich_permit_context(value, evidence_text)
     if document_type in PERMIT_DOCUMENT_TYPES:
         return True
-    context = _normalize_value(f"{value} {evidence_text}")
     if any(term in context for term in PERMIT_CONTEXT_TERMS):
         return True
     return False

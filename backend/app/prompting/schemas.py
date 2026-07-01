@@ -27,7 +27,7 @@ PromptActionType = Literal[
     "select_ai_model",
 ]
 
-PromptClarificationKind = Literal["project", "model", "action"]
+PromptClarificationKind = Literal["project", "model", "action", "review_fact"]
 
 
 class PromptActionArguments(StrictModel):

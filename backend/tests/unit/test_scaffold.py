@@ -43,6 +43,18 @@ def test_classifier_handles_common_vkm_610_documents() -> None:
     assert classify_document_type("Kronologjia.mpp", "")[0] == "project_schedule"
 
 
+def test_classifier_prefers_explicit_official_permit_header_over_schedule_terms() -> None:
+    text = (
+        "BASHKIA FIER Nr.4571/4 Prot. LEJE NDËRTIMI Nr. 274, Datë 21.08.2020 "
+        "I JEPET: SHEZAI ÇOBO. AFATI KOHOR I KËSAJ LEJE dhe grafiku i punimeve."
+    )
+
+    result = classify_document("4571.4 LEJE KRYETAR.pdf", text)
+
+    assert result.document_type == "construction_permit"
+    assert result.confidence == 0.99
+
+
 def test_classifier_handles_real_dossier_filenames() -> None:
     examples = {
         "0. Kontrate Kolaudatorin me z.Naqe Bala.docx": "contract_and_related_acts",

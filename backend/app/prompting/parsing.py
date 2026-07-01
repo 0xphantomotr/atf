@@ -89,6 +89,7 @@ def format_prompt_parse_summary(
     *,
     project_name: str,
     skipped_count: int,
+    skipped_files: list[dict[str, str]] | None = None,
     source_label: str = "attachment",
     skipped_label: str = "ZIP",
 ) -> str:
@@ -107,6 +108,15 @@ def format_prompt_parse_summary(
     ]
     if summary.missing_version_count:
         lines.append(f"Versione që nuk u gjetën: {summary.missing_version_count}")
+    skipped_files = [item for item in skipped_files or [] if isinstance(item, dict)]
+    if skipped_files:
+        lines.extend(["", "Skedarë të anashkaluar:"])
+        for item in skipped_files[:8]:
+            filename = _clip_summary_value(str(item.get("filename") or "skedar"), 110)
+            reason = _clip_summary_value(str(item.get("reason") or "arsye e panjohur"), 80)
+            lines.append(f"- {filename}: {reason}")
+        if len(skipped_files) > 8:
+            lines.append(f"- ... edhe {len(skipped_files) - 8} skedarë të tjerë")
     lines.extend(
         [
             "",
@@ -114,3 +124,10 @@ def format_prompt_parse_summary(
         ]
     )
     return "\n".join(lines)
+
+
+def _clip_summary_value(value: str, limit: int) -> str:
+    value = " ".join(value.split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"

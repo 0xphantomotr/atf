@@ -1049,6 +1049,51 @@ def test_required_public_details_skip_bare_permit_reference() -> None:
     assert details == []
 
 
+def test_required_public_details_exclude_noncanonical_permit_alternatives() -> None:
+    details = select_required_public_details(
+        {
+            "canonical_facts": {
+                "construction_permit_number": {"value": "Nr. 274"},
+            },
+            "registers": {
+                "permits_property_licenses": [
+                    {
+                        "field_name": "construction_permit_number",
+                        "value": "4571/4, datë 21/08/2020",
+                        "source_documents": ["Akt Dorezim Sheshi.docx"],
+                    },
+                    {
+                        "field_name": "construction_permit_number",
+                        "value": "Nr. 274",
+                        "confidence_level": "high",
+                        "source_documents": ["Leje Ndërtimi.pdf"],
+                    },
+                ],
+            },
+        }
+    )
+
+    assert [detail["value"] for detail in details] == ["Nr. 274"]
+
+
+def test_user_confirmed_fact_override_becomes_canonical() -> None:
+    state = {
+        "documents": [],
+        "document_analyses": [],
+        "user_fact_overrides": {"construction_permit_number": "Nr. 274"},
+        "agent_trace": [],
+    }
+
+    dossier = build_professional_dossier(state)["professional_dossier"]
+
+    fact = dossier["canonical_facts"]["construction_permit_number"]
+    assert fact["value"] == "Nr. 274"
+    assert fact["user_confirmed"] is True
+    assert dossier["user_confirmations"] == [
+        {"field": "construction_permit_number", "value": "Nr. 274"}
+    ]
+
+
 def test_required_public_details_skip_role_name_text_alias() -> None:
     details = select_required_public_details(
         {

@@ -11,6 +11,7 @@ from app.agents.dossier_consolidation import (
     REGISTER_MATERIALS,
     REGISTER_TECHNICAL,
     canonical_field_name,
+    contextual_claim_field_name,
     consolidate_project_registers,
     permit_claim_has_context,
 )
@@ -386,6 +387,11 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
         canonical_fields=PROJECT_CANONICAL_FIELDS,
         conflict_fields=PUBLIC_BLOCKING_CONFLICT_FIELDS,
     )
+    user_confirmations = _apply_user_fact_overrides(
+        canonical_facts,
+        conflicts,
+        state.get("user_fact_overrides"),
+    )
     scoped_facts = _build_scoped_facts(
         candidates,
         canonical_fields=PROJECT_CANONICAL_FIELDS,
@@ -432,6 +438,7 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
         "document_records": document_records,
         "evidence_by_section": evidence_by_section,
         "style_references": style_references,
+        "user_confirmations": user_confirmations,
         "missing_core_fields": missing_core_fields,
         "summary": {
             "documents_received": len(document_records),
@@ -465,6 +472,73 @@ def build_professional_dossier(state: AuditGraphState) -> AuditGraphState:
         ),
     }
     return state
+
+
+def _apply_user_fact_overrides(
+    canonical_facts: dict[str, dict[str, Any]],
+    conflicts: list[dict[str, Any]],
+    raw_overrides: object,
+) -> list[dict[str, str]]:
+    if not isinstance(raw_overrides, dict):
+        return []
+    confirmations: list[dict[str, str]] = []
+    conflicts_by_field = {
+        str(conflict.get("field") or ""): conflict
+        for conflict in conflicts
+        if isinstance(conflict, dict)
+    }
+    for raw_field, raw_value in raw_overrides.items():
+        field = canonical_field_name(raw_field)
+        value = " ".join(str(raw_value or "").split()).strip(" ;")
+        if field not in PROJECT_CANONICAL_FIELDS or not value:
+            continue
+        previous = canonical_facts.get(field)
+        alternatives: list[dict[str, Any]] = []
+        if isinstance(previous, dict) and str(previous.get("value") or "").strip():
+            previous_value = str(previous["value"])
+            if not _values_equivalent(field, previous_value, value):
+                alternatives.append(
+                    {
+                        "value": previous_value,
+                        "score": previous.get("confidence"),
+                        "source_documents": list(previous.get("source_documents") or []),
+                    }
+                )
+            alternatives.extend(
+                item
+                for item in previous.get("alternatives", [])
+                if isinstance(item, dict)
+                and not _values_equivalent(field, str(item.get("value") or ""), value)
+            )
+        canonical_facts[field] = {
+            "value": value,
+            "confidence": 1.0,
+            "confidence_level": "user_confirmed",
+            "source_documents": ["Konfirmuar nga përdoruesi"],
+            "source_document_types": ["user_confirmation"],
+            "evidence": [],
+            "corroborating_source_count": 1,
+            "alternatives": alternatives[:3],
+            "user_confirmed": True,
+        }
+        conflict = conflicts_by_field.get(field)
+        if conflict is not None:
+            conflict["selected_value"] = value
+            conflict["selected_score"] = 1.0
+            conflict["alternatives"] = alternatives[:3]
+            conflict["resolution"] = "user_confirmed"
+        elif alternatives and field in PUBLIC_BLOCKING_CONFLICT_FIELDS:
+            conflict = {
+                "field": field,
+                "selected_value": value,
+                "selected_score": 1.0,
+                "alternatives": alternatives[:3],
+                "resolution": "user_confirmed",
+            }
+            conflicts.append(conflict)
+            conflicts_by_field[field] = conflict
+        confirmations.append({"field": field, "value": value})
+    return confirmations
 
 
 def _analyse_document(
@@ -1199,15 +1273,21 @@ def _add_persisted_analysis_candidates(
             ]
             if not verified_evidence:
                 continue
-            field = canonical_field_name(claim.get("field_name"))
             value = str(claim.get("original_value") or "").strip()
-            if not field or not value or PLACEHOLDER_PATTERN.search(value):
+            if not value or PLACEHOLDER_PATTERN.search(value):
                 continue
             value = " ".join(value.split()).strip(" ;,.")
             if len(value) < 2 or len(value) > 280:
                 continue
             evidence = verified_evidence[0]
             snippet = str(evidence.get("supporting_excerpt") or value)
+            field = contextual_claim_field_name(
+                claim.get("field_name"),
+                evidence_text=snippet,
+                document_type=str(document.get("document_type") or ""),
+            )
+            if not field:
+                continue
             if not _field_allowed_for_document(
                 field,
                 document,

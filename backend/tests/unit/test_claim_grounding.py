@@ -112,6 +112,18 @@ def test_verifier_accepts_current_canonical_fallback_evidence() -> None:
     )
 
 
+def test_user_confirmed_canonical_fact_is_accepted_without_file_version() -> None:
+    state = _grounded_state()
+    state["professional_dossier"]["canonical_facts"]["kolaudator"] = {
+        "value": "Ing. Konfirmuar",
+        "confidence_level": "user_confirmed",
+        "user_confirmed": True,
+    }
+    catalog = build_claim_evidence_catalog(state)
+
+    assert catalog["canonical:kolaudator"]["kind"] == "user_confirmation"
+
+
 def _draft_with_paragraphs() -> dict:
     return {
         "status": "drafted",
@@ -641,6 +653,48 @@ def test_correction_replacement_backstop_replaces_conflict_alternative() -> None
         "conflict:0",
         "canonical:construction_permit_number",
     ]
+
+
+def test_correction_backstop_inserts_verified_required_detail() -> None:
+    version_id = str(uuid.uuid4())
+    draft = {
+        "executive_summary": "Përmbledhje.",
+        "sections": [],
+        "claim_ledger": [],
+    }
+    verification = {
+        "correction_instructions": [
+            {
+                "code": "PUBLIC-DETAIL-MISSING",
+                "field": "construction_permit_number",
+                "register": "permits_property_licenses",
+                "required_value": "Nr. 274",
+                "evidence_ids": ["permits_property_licenses:0"],
+            }
+        ]
+    }
+    catalog = {
+        "permits_property_licenses:0": {
+            "evidence_id": "permits_property_licenses:0",
+            "kind": "register_entry",
+            "source_references": [_source(version_id, "Leje Ndërtimi.pdf")],
+        }
+    }
+
+    _apply_verification_replacements(
+        draft,
+        verification,
+        evidence_catalog=catalog,
+    )
+
+    assert draft["sections"][0]["code"] == "legal_and_administrative"
+    assert "Nr. 274" in draft["sections"][0]["body"]
+    assert draft["claim_ledger"][0]["evidence_ids"] == [
+        "permits_property_licenses:0"
+    ]
+    assert draft["claim_ledger"][0]["source_references"][0][
+        "file_version_id"
+    ] == version_id
 
 
 def test_publication_gate_rejects_unverified_revision() -> None:

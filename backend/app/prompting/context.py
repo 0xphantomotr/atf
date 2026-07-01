@@ -78,7 +78,7 @@ async def load_pending_clarification(
             PromptRun.telegram_chat_id == telegram_chat_id,
             PromptRun.id != exclude_run_id,
             PromptRun.status == "waiting_for_clarification",
-            PromptRun.created_at >= cutoff,
+            PromptRun.updated_at >= cutoff,
         )
         .order_by(PromptRun.created_at.desc())
         .limit(1)
@@ -97,6 +97,82 @@ async def load_pending_clarification(
     except ValueError:
         return None, None
     return run, context
+
+
+async def resolve_review_fact_clarification(
+    session: AsyncSession,
+    *,
+    pending_run: PromptRun,
+    response_run: PromptRun,
+    response: str,
+) -> tuple[str, str]:
+    pending = dict(pending_run.pending_clarification or {})
+    if pending.get("kind") != "review_fact":
+        raise ValueError("Sqarimi në pritje nuk i përket një fakti të dosjes.")
+    try:
+        review_job_id = UUID(str(pending["review_job_id"]))
+    except (KeyError, ValueError) as exc:
+        raise ValueError("Gjenerimi që kërkoi sqarim nuk është i vlefshëm.") from exc
+    field = str(pending.get("field") or "").strip()
+    options = [str(item).strip() for item in pending.get("options") or [] if str(item).strip()]
+    value = _clarification_value(response, field=field, options=options)
+
+    from app.reviews.service import (
+        enqueue_review_job,
+        resume_review_job_with_fact_override,
+    )
+
+    job = await resume_review_job_with_fact_override(
+        session,
+        job_id=review_job_id,
+        user_id=pending_run.user_id,
+        field=field,
+        value=value,
+        enqueue=False,
+    )
+    pending_run.status = "waiting_for_review"
+    pending_run.pending_clarification = {}
+    pending_run.worker_lease_until = None
+    pending_run.error_code = None
+    pending_run.error_detail = None
+    response_run.status = "completed"
+    response_run.project_id = pending_run.project_id
+    response_run.plan_version = "review-fact-clarification-v1"
+    response_run.plan = {
+        "version": "review-fact-clarification-v1",
+        "field": field,
+        "value": value,
+        "resumes_prompt_run_id": str(pending_run.id),
+    }
+    response_run.completed_at = datetime.now(timezone.utc)
+    await write_audit_log(
+        session,
+        action="prompt.review_fact.confirmed",
+        entity_type="review_job",
+        entity_id=job.id,
+        actor_user_id=pending_run.user_id,
+        project_id=pending_run.project_id,
+        details={"field": field, "resumed_prompt_run_id": str(pending_run.id)},
+    )
+    await session.commit()
+    enqueue_review_job(job)
+    return field, value
+
+
+def _clarification_value(response: str, *, field: str, options: list[str]) -> str:
+    value = " ".join(response.split()).strip()
+    if value.isdigit() and options:
+        index = int(value) - 1
+        if 0 <= index < len(options):
+            return options[index]
+    prefix = field.replace("_", " ")
+    if ":" in value:
+        left, right = value.split(":", 1)
+        if left.strip().casefold() in {field.casefold(), prefix.casefold()} and right.strip():
+            value = right.strip()
+    if not 1 < len(value) <= 280:
+        raise ValueError("Jepni vlerën e saktë ose numrin e një alternative.")
+    return value
 
 
 async def resolve_pending_clarification(

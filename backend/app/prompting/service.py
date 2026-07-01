@@ -349,6 +349,33 @@ async def mark_prompt_run_waiting_for_review(
     await session.commit()
 
 
+async def mark_prompt_run_waiting_for_review_input(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+    review_job_id: UUID,
+    issue: dict,
+    question: str,
+    options: list[str],
+) -> None:
+    run.review_job_id = review_job_id
+    run.status = "waiting_for_clarification"
+    run.pending_clarification = {
+        "kind": "review_fact",
+        "question": question,
+        "options": options[:8],
+        "review_job_id": str(review_job_id),
+        "field": str(issue.get("field") or ""),
+        "issue_code": str(issue.get("code") or ""),
+        "expires_at": (
+            datetime.now(timezone.utc)
+            + timedelta(seconds=settings.prompt_clarification_timeout_seconds)
+        ).isoformat(),
+    }
+    run.worker_lease_until = None
+    await session.commit()
+
+
 async def mark_prompt_run_waiting_for_delivery(
     session: AsyncSession,
     *,

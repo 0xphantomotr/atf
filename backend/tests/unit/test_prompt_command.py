@@ -19,7 +19,11 @@ from app.prompting.confirmation import (
     confirmation_callback_data,
     parse_confirmation_callback,
 )
-from app.prompting.context import QAFollowUpContext, clarification_message
+from app.prompting.context import (
+    QAFollowUpContext,
+    _clarification_value,
+    clarification_message,
+)
 from app.prompting.generation import (
     format_generation_estimate,
     generation_estimate_fingerprint,
@@ -1270,6 +1274,9 @@ def test_prompt_parse_summary_reports_terminal_outcomes() -> None:
         summary,
         project_name="Dosja A",
         skipped_count=3,
+        skipped_files=[
+            {"filename": "vizatime/themeli.dwg", "reason": "format i pambështetur"},
+        ],
     )
     assert "Të lexuara: 1" in message
     assert "Të lexuara me OCR: 1" in message
@@ -1277,6 +1284,22 @@ def test_prompt_parse_summary_reports_terminal_outcomes() -> None:
     assert "Formate të papërpunuara: 1" in message
     assert "Dështuan: 1" in message
     assert "Të anashkaluara nga ZIP: 3" in message
+    assert "vizatime/themeli.dwg: format i pambështetur" in message
+
+
+def test_review_fact_clarification_accepts_option_or_direct_value() -> None:
+    options = ["Nr. 274", "4571/4"]
+
+    assert _clarification_value(
+        "1",
+        field="construction_permit_number",
+        options=options,
+    ) == "Nr. 274"
+    assert _clarification_value(
+        "construction permit number: Nr. 300",
+        field="construction_permit_number",
+        options=options,
+    ) == "Nr. 300"
 
 
 def test_missing_prompt_file_version_keeps_summary_incomplete() -> None:

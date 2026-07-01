@@ -2,7 +2,10 @@ import json
 import re
 from typing import Any, Literal
 
-from app.agents.claim_grounding import build_claim_evidence_catalog
+from app.agents.claim_grounding import (
+    build_claim_evidence_catalog,
+    claim_source_references,
+)
 from app.agents.llm import AIQuotaLimitError, LLMReviewError, request_kolaudim_correction
 from app.agents.nodes.kolaudim_writer import _normalize_kolaudim_draft
 from app.agents.state import AuditGraphState
@@ -10,7 +13,9 @@ from app.ai.stages import ai_settings_for_stage
 
 
 class ClaimVerificationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, issues: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message)
+        self.issues = [dict(issue) for issue in issues or [] if isinstance(issue, dict)]
 
 
 CONCLUSION_LANGUAGE_CODE = "CLAIM-CONCLUSION-LEVEL-LANGUAGE"
@@ -119,7 +124,11 @@ def correct_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
         corrected,
         evidence_catalog=catalog,
     )
-    _apply_verification_replacements(normalized, verification)
+    _apply_verification_replacements(
+        normalized,
+        verification,
+        evidence_catalog=catalog,
+    )
     normalized["provider"] = ai_settings.get("provider")
     normalized["model"] = ai_settings.get("model")
     normalized["api_key_hint"] = ai_settings.get("api_key_hint")
@@ -176,7 +185,8 @@ def enforce_publishable_kolaudim(state: AuditGraphState) -> AuditGraphState:
         detail = _publish_block_detail(major_issues)
         raise ClaimVerificationError(
             "Drafti i Akt-Kolaudimit mbeti i pambështetur pas një korrigjimi: "
-            f"{detail}. Nuk u prodhua dokument publik."
+            f"{detail}. Nuk u prodhua dokument publik.",
+            issues=major_issues,
         )
     return state
 
@@ -408,6 +418,8 @@ def _build_correction_input(
 def _apply_verification_replacements(
     draft: dict[str, Any],
     verification: dict[str, Any],
+    *,
+    evidence_catalog: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     issues = verification.get("correction_instructions", [])
     if not isinstance(issues, list):
@@ -420,9 +432,6 @@ def _apply_verification_replacements(
         and str(issue.get("selected_value") or "").strip()
         and str(issue.get("alternative_value") or "").strip()
     ]
-    if not replacements:
-        return
-
     for issue in replacements:
         selected = str(issue.get("selected_value") or "").strip()
         alternative = str(issue.get("alternative_value") or "").strip()
@@ -462,6 +471,120 @@ def _apply_verification_replacements(
                 claim["evidence_ids"] = list(
                     dict.fromkeys([*map(str, raw_ids), *evidence_ids])
                 )
+
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.get("code") != "PUBLIC-DETAIL-MISSING":
+            continue
+        _append_required_public_detail(
+            draft,
+            issue,
+            evidence_catalog=evidence_catalog or {},
+        )
+
+
+def _append_required_public_detail(
+    draft: dict[str, Any],
+    issue: dict[str, Any],
+    *,
+    evidence_catalog: dict[str, dict[str, Any]],
+) -> None:
+    field = str(issue.get("field") or "").strip()
+    value = str(issue.get("required_value") or "").strip()
+    if not field or not value or _draft_contains_value(draft, value):
+        return
+
+    section_code, section_title = _detail_section(
+        field,
+        str(issue.get("register") or ""),
+    )
+    statement = _detail_statement(field, value)
+    sections = draft.setdefault("sections", [])
+    if not isinstance(sections, list):
+        sections = []
+        draft["sections"] = sections
+    section = next(
+        (
+            item
+            for item in sections
+            if isinstance(item, dict) and str(item.get("code") or "") == section_code
+        ),
+        None,
+    )
+    if section is None:
+        section = {"code": section_code, "title": section_title, "body": ""}
+        sections.append(section)
+    body = str(section.get("body") or "").strip()
+    section["body"] = f"{body}\n\n{statement}".strip()
+
+    evidence_ids = [
+        str(item)
+        for item in issue.get("evidence_ids", [])
+        if str(item).strip()
+    ]
+    ledger = draft.setdefault("claim_ledger", [])
+    if not isinstance(ledger, list):
+        ledger = []
+        draft["claim_ledger"] = ledger
+    ledger.append(
+        {
+            "claim_id": f"deterministic_detail:{field}:{len(ledger)}",
+            "section_code": section_code,
+            "statement": statement,
+            "claim_type": "documented_fact",
+            "conclusion_level": "proven",
+            "evidence_ids": evidence_ids,
+            "confidence": 1.0,
+            "source_references": claim_source_references(
+                evidence_ids,
+                evidence_catalog,
+            ),
+        }
+    )
+
+
+def _detail_section(field: str, register: str) -> tuple[str, str]:
+    if "permit" in field or register == "permits_property_licenses":
+        return "legal_and_administrative", "Baza ligjore dhe administrative"
+    if "contract" in field or register == "contracts_and_economics":
+        return "parties_and_contracts", "Palët dhe marrëdhëniet kontraktore"
+    if "date" in field or register == "construction_chronology":
+        return "execution_and_chronology", "Kronologjia e punimeve"
+    if register == "materials_and_tests":
+        return "quality_and_hidden_works", "Materialet, provat dhe cilësia"
+    return "design_and_parameters", "Të dhënat teknike të objektit"
+
+
+def _detail_statement(field: str, value: str) -> str:
+    labels = {
+        "construction_permit_number": "Leja e ndërtimit",
+        "construction_permit_protocol": "Protokolli i lejes së ndërtimit",
+        "construction_permit_date": "Data e lejes së ndërtimit",
+        "development_permit_number": "Leja e zhvillimit",
+        "development_permit_protocol": "Protokolli i lejes së zhvillimit",
+        "development_permit_date": "Data e lejes së zhvillimit",
+        "contractor_contract_reference": "Referenca e kontratës së sipërmarrjes",
+        "supervisor_contract_reference": "Referenca e kontratës së mbikëqyrjes",
+        "kolaudator_contract_reference": "Referenca e kontratës së kolaudimit",
+    }
+    label = labels.get(field, field.replace("_", " ").capitalize())
+    return f"{label}: {value}."
+
+
+def _draft_contains_value(draft: dict[str, Any], value: str) -> bool:
+    normalized = re.sub(r"\s+", "", value).casefold()
+    if not normalized:
+        return True
+    public_parts = [
+        str(draft.get("executive_summary") or ""),
+        str(draft.get("signature_note") or ""),
+    ]
+    public_parts.extend(
+        str(section.get("body") or "")
+        for section in draft.get("sections", [])
+        if isinstance(section, dict)
+    )
+    public_text = re.sub(r"\s+", "", " ".join(public_parts)).casefold()
+    return normalized in public_text
 
 
 def _replace_material_value(text: str, alternative: str, selected: str) -> str:

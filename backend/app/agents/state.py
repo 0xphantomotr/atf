@@ -7,6 +7,7 @@ class AuditGraphState(TypedDict, total=False):
     project: dict[str, Any]
     job: dict[str, Any]
     user_prompt: str
+    user_fact_overrides: dict[str, str]
     documents: list[dict[str, Any]]
     document_analyses: list[dict[str, Any]]
     document_inventory: dict[str, Any]

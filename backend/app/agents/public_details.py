@@ -94,6 +94,7 @@ NON_BLOCKING_FIELD_TERMS = (
 )
 NON_BLOCKING_EXACT_FIELDS = {
     "contract_reference",
+    "permit_type",
 }
 
 
@@ -107,6 +108,9 @@ def select_required_public_details(
     registers = dossier.get("registers")
     if not isinstance(registers, dict):
         return []
+    canonical_facts = dossier.get("canonical_facts")
+    if not isinstance(canonical_facts, dict):
+        canonical_facts = {}
 
     candidates: list[dict[str, Any]] = []
     for register_name, entries in registers.items():
@@ -125,6 +129,12 @@ def select_required_public_details(
             if _is_non_blocking_role_detail(field):
                 continue
             if field in NON_BLOCKING_EXACT_FIELDS:
+                continue
+            if field in PERMIT_FIELDS and not _matches_canonical_value(
+                field,
+                value,
+                canonical_facts,
+            ):
                 continue
             source_documents = _string_list(
                 entry.get("source_documents"),
@@ -180,6 +190,23 @@ def select_required_public_details(
         if len(selected) >= max_items:
             break
     return selected
+
+
+def _matches_canonical_value(
+    field: str,
+    value: str,
+    canonical_facts: dict[str, Any],
+) -> bool:
+    fact = canonical_facts.get(field)
+    if not isinstance(fact, dict):
+        return True
+    canonical_value = _clean_text(fact.get("value"))
+    if not canonical_value:
+        return True
+    return _is_same_field_duplicate(
+        {"field_name": field, "value": value},
+        {"field_name": field, "value": canonical_value},
+    )
 
 
 def _field_group_priority(register: str, field: str) -> tuple[str, int]:
