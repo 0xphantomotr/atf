@@ -8,9 +8,11 @@ from app.reviews.schemas import GenerateRequest
 
 BACKGROUND_ACTIONS = {
     "import_attachment",
+    "import_drive_folder",
     "estimate_kolaudim",
     "generate_kolaudim",
     "deliver_latest_report",
+    "upload_report_to_drive",
     "answer_project_question",
 }
 

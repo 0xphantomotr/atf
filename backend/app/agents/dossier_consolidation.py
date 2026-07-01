@@ -502,6 +502,8 @@ def _add_missing_canonical_entries(
                 "sources": [
                     {
                         "source_document": item.get("source_document"),
+                        "file_version_id": item.get("source_file_version_id"),
+                        "analysis_run_id": item.get("analysis_run_id"),
                         "chunk_references": [
                             {
                                 "chunk_id": item.get("source_chunk_id"),

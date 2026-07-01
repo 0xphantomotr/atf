@@ -9,8 +9,10 @@ ACTION_ORDER = (
     "get_status",
     "select_ai_model",
     "import_attachment",
+    "import_drive_folder",
     "estimate_kolaudim",
     "generate_kolaudim",
+    "upload_report_to_drive",
     "deliver_latest_report",
     "answer_project_question",
 )
@@ -43,6 +45,9 @@ def detect_intent_hints(prompt: str, *, has_attachment: bool = False) -> list[st
     )
     if has_attachment and import_requested:
         hints.add("import_attachment")
+    has_drive_folder = "drive.google.com" in prompt.casefold()
+    if has_drive_folder and import_requested:
+        hints.add("import_drive_folder")
 
     generation_requested = bool(
         re.search(
@@ -55,6 +60,15 @@ def detect_intent_hints(prompt: str, *, has_attachment: bool = False) -> list[st
         hints.update({"estimate_kolaudim", "generate_kolaudim"})
     if _contains_any(text, "ma dergo pdf", "dergo pdf", "raportin e fundit", "raportet"):
         hints.add("deliver_latest_report")
+    if has_drive_folder and _contains_any(
+        text,
+        "ruaje aty",
+        "ngarkoje aty",
+        "ruaje ne folder",
+        "ngarkoje ne folder",
+        "google drive",
+    ):
+        hints.add("upload_report_to_drive")
 
     management_hints = hints & {
         "list_projects",
@@ -64,8 +78,10 @@ def detect_intent_hints(prompt: str, *, has_attachment: bool = False) -> list[st
         "get_status",
         "select_ai_model",
         "import_attachment",
+        "import_drive_folder",
         "generate_kolaudim",
         "deliver_latest_report",
+        "upload_report_to_drive",
     }
     if not management_hints and _looks_like_dossier_question(text):
         hints.add("answer_project_question")

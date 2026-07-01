@@ -275,6 +275,9 @@ def _replace_statement_in_public_draft(
 
 def _issue_detail(issue: dict[str, Any]) -> str:
     code = str(issue.get("code") or "verification_failed")
+    if code == "PUBLIC-TABLE-FACT-NOT-CURRENT":
+        field = str(issue.get("field") or "unknown_field")
+        return f"{code}[field={field}]"
     if code == "PUBLIC-DETAIL-MISSING":
         field = str(issue.get("field") or "unknown_field")
         required = _clip(str(issue.get("required_value") or ""))

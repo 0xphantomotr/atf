@@ -4,6 +4,7 @@ from app.ai.routes import router as ai_settings_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.files.routes import router as files_router
+from app.google_drive.routes import router as google_drive_router
 from app.laws.routes import router as laws_router
 from app.projects.routes import router as projects_router
 from app.reviews.routes import router as reviews_router
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(telegram_router)
+    app.include_router(google_drive_router)
     app.include_router(ai_settings_router)
     app.include_router(users_router)
     app.include_router(projects_router)

@@ -123,10 +123,10 @@ async def _advance_plan(
             user_id=run.user_id,
         )
 
-        if action.type == "import_attachment":
+        if action.type in {"import_attachment", "import_drive_folder"}:
             prompting_service.queue_prompt_notification(
                 run,
-                key="attachment_imported",
+                key=f"{action.type}_imported",
                 body=result.message + "\n\nPo pres përfundimin e leximit të dokumenteve.",
             )
             await prompting_service.mark_prompt_run_waiting_for_documents(
@@ -136,6 +136,13 @@ async def _advance_plan(
             )
             return PromptAdvanceResult(
                 reschedule_after_seconds=settings.prompt_parse_poll_seconds,
+            )
+
+        if action.type == "upload_report_to_drive":
+            prompting_service.queue_prompt_notification(
+                run,
+                key="drive_report_uploaded",
+                body=result.message,
             )
 
         if action.type == "generate_kolaudim":
@@ -196,7 +203,7 @@ async def _advance_plan(
             key="project_question_answered",
             body=answer_message,
         )
-    else:
+    elif not any(action.type == "upload_report_to_drive" for action in plan.actions):
         prompting_service.queue_prompt_notification(
             run,
             key="prompt_run_completed",
@@ -252,6 +259,10 @@ async def _advance_document_wait(
             summary,
             project_name=project.name,
             skipped_count=int(import_data.get("skipped_count") or 0),
+            source_label=(
+                "Google Drive" if import_data.get("drive_folder_id") else "attachment"
+            ),
+            skipped_label="Google Drive" if import_data.get("drive_folder_id") else "ZIP",
         ),
     )
     run.status = "queued"

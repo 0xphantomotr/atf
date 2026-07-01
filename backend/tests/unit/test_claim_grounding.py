@@ -80,6 +80,38 @@ def _grounded_state() -> dict:
     }
 
 
+def test_verifier_accepts_current_canonical_fallback_evidence() -> None:
+    state = _grounded_state()
+    version_id = state["documents"][0]["version_id"]
+    state["professional_dossier"]["canonical_facts"]["kolaudator"] = {
+        "value": "Ing. Test",
+        "confidence_level": "high",
+    }
+    state["professional_dossier"]["registers"]["stakeholders"] = [
+        {
+            "field_name": "kolaudator",
+            "value": "Ing. Test",
+            "sources": [_source(version_id, "dosja.docx")],
+        }
+    ]
+    response = _draft_with_paragraphs()
+    response["executive_summary"]["text"] = (
+        "Akti lidhet me objektin Godinë banimi dhe kolaudatorin Ing. Test."
+    )
+    state["kolaudim_draft"] = _normalize_kolaudim_draft(
+        response,
+        evidence_catalog=build_claim_evidence_catalog(state),
+    )
+
+    result = verify_kolaudim_claims(state)["claim_verification"]
+
+    assert not any(
+        issue["code"] == "PUBLIC-TABLE-FACT-NOT-CURRENT"
+        and issue.get("field") == "kolaudator"
+        for issue in result["issues"]
+    )
+
+
 def _draft_with_paragraphs() -> dict:
     return {
         "status": "drafted",

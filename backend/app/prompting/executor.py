@@ -4,6 +4,11 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import service as ai_service
+from app.google_drive.service import (
+    GoogleDriveError,
+    import_google_drive_folder,
+    upload_generated_pdf_to_drive,
+)
 from app.projects import service as projects_service
 from app.projects.models import Project
 from app.projects.schemas import ProjectCreate
@@ -290,6 +295,38 @@ async def _execute_action(
             None,
         )
 
+    if action_type == "import_drive_folder":
+        project = await get_active_project(session, user_id=user_id)
+        if project is None:
+            raise PromptExecutionError(
+                "active_project_missing",
+                "Zgjidhni ose krijoni një projekt para importimit nga Google Drive.",
+            )
+        try:
+            import_result = await import_google_drive_folder(
+                session,
+                project_id=project.id,
+                user_id=user_id,
+                folder_url=_require_drive_url(arguments),
+            )
+        except GoogleDriveError as exc:
+            raise PromptExecutionError("drive_folder_import_failed", str(exc)) from exc
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=(
+                    f"Folderi Google Drive u importua: {import_result.folder_name}\n"
+                    f"Dokumente të reja: {import_result.uploaded_count}\n"
+                    f"Dokumente ekzistuese të ripërdorura: {import_result.reused_count}\n"
+                    f"Të anashkaluara: {len(import_result.skipped)}"
+                ),
+                data=import_result.as_step_data(),
+            ),
+            project.id,
+            None,
+        )
+
     if action_type == "estimate_kolaudim":
         project = await _prompt_project(session, run=run, user_id=user_id)
         estimate = await reviews_service.estimate_review_job(
@@ -344,43 +381,13 @@ async def _execute_action(
 
     if action_type == "deliver_latest_report":
         project = await _prompt_project(session, run=run, user_id=user_id)
-        job = None
-        if run.review_job_id is not None:
-            job = await reviews_service.get_review_job(
-                session,
-                job_id=run.review_job_id,
-                user_id=user_id,
-            )
-        elif arguments.get("job_ref") is None:
-            job = await get_latest_completed_review_job(
-                session,
-                user_id=user_id,
-                project_id=project.id,
-            )
-        if job is None:
-            raise PromptExecutionError(
-                "report_job_missing",
-                "Nuk u gjet një gjenerim i përfunduar për këtë kërkesë.",
-            )
-        if job.status != "completed":
-            raise PromptExecutionError(
-                "report_not_ready",
-                f"Akt-Kolaudimi nuk është ende gati. Statusi: {job.status}.",
-            )
-        _, outputs = await reviews_service.get_review_job_outputs(
+        job, pdf_output = await _resolve_report_output(
             session,
-            job_id=job.id,
+            run=run,
+            project_id=project.id,
             user_id=user_id,
+            allow_latest=arguments.get("job_ref") is None,
         )
-        pdf_output = next(
-            (output for output in outputs if output.output_type == "pdf"),
-            None,
-        )
-        if pdf_output is None or pdf_output.review_job_id != job.id:
-            raise PromptExecutionError(
-                "report_pdf_missing",
-                "Gjenerimi përfundoi, por PDF-ja e lidhur me të nuk u gjet.",
-            )
         return (
             PromptActionResult(
                 step_key="",
@@ -391,6 +398,48 @@ async def _execute_action(
                     "review_job_id": str(job.id),
                     "output_id": str(pdf_output.id),
                     "project_name": project.name,
+                },
+            ),
+            project.id,
+            job.id,
+        )
+
+    if action_type == "upload_report_to_drive":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        job, pdf_output = await _resolve_report_output(
+            session,
+            run=run,
+            project_id=project.id,
+            user_id=user_id,
+            allow_latest=arguments.get("job_ref") is None,
+        )
+        try:
+            uploaded = await upload_generated_pdf_to_drive(
+                session,
+                output_id=pdf_output.id,
+                expected_review_job_id=job.id,
+                prompt_run_id=run.id,
+                user_id=user_id,
+                folder_url=_require_drive_url(arguments),
+            )
+        except GoogleDriveError as exc:
+            raise PromptExecutionError("drive_report_upload_failed", str(exc)) from exc
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=(
+                    "Akt-Kolaudimi u ruajt në Google Drive.\n"
+                    f"Skedari: {uploaded.filename}\n"
+                    f"Linku: {uploaded.web_view_link}"
+                ),
+                data={
+                    "project_id": str(project.id),
+                    "review_job_id": str(job.id),
+                    "output_id": str(pdf_output.id),
+                    "drive_file_id": uploaded.file_id,
+                    "drive_web_view_link": uploaded.web_view_link,
+                    "reused": uploaded.reused,
                 },
             ),
             project.id,
@@ -489,6 +538,61 @@ async def _execute_action(
         "action_not_implemented",
         f"Veprimi {action_type} nuk është implementuar.",
     )
+
+
+async def _resolve_report_output(
+    session: AsyncSession,
+    *,
+    run: PromptRun,
+    project_id: UUID,
+    user_id: UUID,
+    allow_latest: bool,
+):
+    job = None
+    if run.review_job_id is not None:
+        job = await reviews_service.get_review_job(
+            session,
+            job_id=run.review_job_id,
+            user_id=user_id,
+        )
+    elif allow_latest:
+        job = await get_latest_completed_review_job(
+            session,
+            user_id=user_id,
+            project_id=project_id,
+        )
+    if job is None or job.project_id != project_id:
+        raise PromptExecutionError(
+            "report_job_missing",
+            "Nuk u gjet një gjenerim i përfunduar për këtë kërkesë.",
+        )
+    if job.status != "completed":
+        raise PromptExecutionError(
+            "report_not_ready",
+            f"Akt-Kolaudimi nuk është ende gati. Statusi: {job.status}.",
+        )
+    _, outputs = await reviews_service.get_review_job_outputs(
+        session,
+        job_id=job.id,
+        user_id=user_id,
+    )
+    pdf_output = next((item for item in outputs if item.output_type == "pdf"), None)
+    if pdf_output is None or pdf_output.review_job_id != job.id:
+        raise PromptExecutionError(
+            "report_pdf_missing",
+            "Gjenerimi përfundoi, por PDF-ja e lidhur me të nuk u gjet.",
+        )
+    return job, pdf_output
+
+
+def _require_drive_url(arguments: dict) -> str:
+    value = arguments.get("drive_url")
+    if not isinstance(value, str) or not value.strip():
+        raise PromptExecutionError(
+            "drive_folder_url_missing",
+            "Kërkesa nuk përmban link të vlefshëm të folderit Google Drive.",
+        )
+    return value.strip()
 
 
 async def _prompt_project(

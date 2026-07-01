@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.google_drive.links import GoogleDriveLinkError, extract_google_drive_folder_id
+
 PROMPT_PLAN_VERSION = "prompt-plan-v1"
 
 
@@ -16,9 +18,11 @@ PromptActionType = Literal[
     "show_active_project",
     "get_status",
     "import_attachment",
+    "import_drive_folder",
     "estimate_kolaudim",
     "generate_kolaudim",
     "deliver_latest_report",
+    "upload_report_to_drive",
     "answer_project_question",
     "select_ai_model",
 ]
@@ -30,6 +34,7 @@ class PromptActionArguments(StrictModel):
     name: str | None = Field(default=None, max_length=255)
     model: str | None = Field(default=None, max_length=255)
     question: str | None = Field(default=None, max_length=3_000)
+    drive_url: str | None = Field(default=None, max_length=2_048)
     job_ref: str | None = Field(
         default=None,
         pattern=r"^step-[1-9][0-9]*$",
@@ -66,6 +71,18 @@ class PromptActionArguments(StrictModel):
             raise ValueError("Project question cannot be empty.")
         return normalized
 
+    @field_validator("drive_url")
+    @classmethod
+    def normalize_drive_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        try:
+            extract_google_drive_folder_id(normalized)
+        except GoogleDriveLinkError as exc:
+            raise ValueError(str(exc)) from exc
+        return normalized
+
 
 class PromptAction(StrictModel):
     id: str = Field(pattern=r"^step-[1-9][0-9]*$", max_length=32)
@@ -89,7 +106,13 @@ class PromptAction(StrictModel):
             raise ValueError("answer_project_question requires a question.")
         if self.type != "answer_project_question" and self.arguments.question is not None:
             raise ValueError(f"{self.type} does not accept a question.")
-        if self.type != "deliver_latest_report" and self.arguments.job_ref is not None:
+        drive_actions = {"import_drive_folder", "upload_report_to_drive"}
+        if self.type in drive_actions and self.arguments.drive_url is None:
+            raise ValueError(f"{self.type} requires a Google Drive folder URL.")
+        if self.type not in drive_actions and self.arguments.drive_url is not None:
+            raise ValueError(f"{self.type} does not accept a Google Drive folder URL.")
+        job_actions = {"deliver_latest_report", "upload_report_to_drive"}
+        if self.type not in job_actions and self.arguments.job_ref is not None:
             raise ValueError(f"{self.type} does not accept a job reference.")
         return self
 

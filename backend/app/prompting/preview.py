@@ -8,9 +8,11 @@ ACTION_LABELS = {
     "get_status": "Kontrollo statusin",
     "select_ai_model": "Ndrysho modelin AI",
     "import_attachment": "Importo attachment-in",
+    "import_drive_folder": "Importo folderin Google Drive",
     "estimate_kolaudim": "Llogarit vlerësimin",
     "generate_kolaudim": "Gjenero Akt Kolaudimi",
     "deliver_latest_report": "Dërgo PDF-në",
+    "upload_report_to_drive": "Ruaj PDF-në në Google Drive",
     "answer_project_question": "Kërko përgjigje në dosje",
 }
 

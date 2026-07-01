@@ -28,6 +28,17 @@ class Settings(BaseSettings):
 
     user_api_key_encryption_secret: str = "local-dev-insecure-change-me"
 
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+    google_oauth_state_ttl_seconds: int = Field(default=600, ge=120, le=3_600)
+    google_drive_max_files: int = Field(default=250, ge=1, le=1_000)
+    google_drive_max_total_bytes: int = Field(
+        default=300 * 1024 * 1024,
+        ge=1024 * 1024,
+        le=2 * 1024 * 1024 * 1024,
+    )
+
     openai_api_key: str = ""
     openai_api_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"

@@ -78,5 +78,23 @@
     "utterance": "Më dërgo raportin e fundit",
     "has_attachment": false,
     "expected_actions": ["deliver_latest_report"]
+  },
+  {
+    "utterance": "Importo dosjen nga https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz dhe gjenero Akt Kolaudimi",
+    "has_attachment": false,
+    "expected_actions": [
+      "import_drive_folder",
+      "estimate_kolaudim",
+      "generate_kolaudim"
+    ]
+  },
+  {
+    "utterance": "Gjenero Akt Kolaudimi dhe ruaje aty https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz",
+    "has_attachment": false,
+    "expected_actions": [
+      "estimate_kolaudim",
+      "generate_kolaudim",
+      "upload_report_to_drive"
+    ]
   }
 ]

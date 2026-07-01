@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.telegram.handlers import (
     ai_settings,
     generate,
+    google_drive,
     projects,
     prompt,
     reports,
@@ -21,6 +22,7 @@ def create_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher()
     dispatcher.include_router(start.router)
     dispatcher.include_router(ai_settings.router)
+    dispatcher.include_router(google_drive.router)
     dispatcher.include_router(prompt.router)
     dispatcher.include_router(projects.router)
     dispatcher.include_router(uploads.router)

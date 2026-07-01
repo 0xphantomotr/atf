@@ -8,9 +8,11 @@ PROMPT_ACTIONS = {
     "show_active_project",
     "get_status",
     "import_attachment",
+    "import_drive_folder",
     "estimate_kolaudim",
     "generate_kolaudim",
     "deliver_latest_report",
+    "upload_report_to_drive",
     "answer_project_question",
     "select_ai_model",
 }
@@ -37,9 +39,11 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
     completed_ids: set[str] = set()
     create_count = 0
     import_count = 0
+    drive_import_count = 0
     estimate_ids: list[str] = []
     generation_ids: list[str] = []
     delivery_count = 0
+    drive_upload_count = 0
     question_count = 0
     model_selection_ids: list[str] = []
     for action in plan.actions:
@@ -97,6 +101,13 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                     "multiple_attachment_imports",
                     "Një kërkesë /prompt mund ta importojë attachment-in vetëm një herë.",
                 )
+        if action.type == "import_drive_folder":
+            drive_import_count += 1
+            if drive_import_count > 1:
+                raise PromptPolicyError(
+                    "multiple_drive_imports",
+                    "Një kërkesë /prompt mund ta importojë folderin Drive vetëm një herë.",
+                )
         if action.type == "estimate_kolaudim":
             estimate_ids.append(action.id)
             if len(estimate_ids) > 1:
@@ -140,6 +151,25 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                         "report_generation_dependency_missing",
                         "Dërgimi i PDF-së duhet të varet nga gjenerimi.",
                     )
+        if action.type == "upload_report_to_drive":
+            drive_upload_count += 1
+            if drive_upload_count > 1:
+                raise PromptPolicyError(
+                    "multiple_drive_uploads",
+                    "Një kërkesë /prompt mund ta ruajë raportin në Drive vetëm një herë.",
+                )
+            if generation_ids:
+                generation_id = generation_ids[-1]
+                if action.arguments.job_ref != generation_id:
+                    raise PromptPolicyError(
+                        "drive_report_job_reference_invalid",
+                        "Ngarkimi në Drive duhet t'i referohet gjenerimit të kësaj kërkese.",
+                    )
+                if generation_id not in action.depends_on:
+                    raise PromptPolicyError(
+                        "drive_report_generation_dependency_missing",
+                        "Ngarkimi në Drive duhet të varet nga gjenerimi.",
+                    )
 
         if action.type == "answer_project_question":
             question_count += 1
@@ -168,6 +198,28 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                 )
 
         completed_ids.add(action.id)
+
+    if import_count + drive_import_count > 1:
+        raise PromptPolicyError(
+            "multiple_import_sources",
+            "Përdorni vetëm një burim dosjeje në të njëjtën kërkesë: attachment ose Drive.",
+        )
+
+    if generation_ids:
+        generation_id = generation_ids[0]
+        for action in plan.actions:
+            if action.type not in {"deliver_latest_report", "upload_report_to_drive"}:
+                continue
+            if action.arguments.job_ref != generation_id:
+                raise PromptPolicyError(
+                    "generated_report_reference_invalid",
+                    "Veprimi mbi PDF-në duhet t'i referohet gjenerimit të kësaj kërkese.",
+                )
+            if generation_id not in action.depends_on:
+                raise PromptPolicyError(
+                    "generated_report_dependency_missing",
+                    "Veprimi mbi PDF-në duhet të varet nga gjenerimi.",
+                )
 
     if question_count:
         incompatible = {

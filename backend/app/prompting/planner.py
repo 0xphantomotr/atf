@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.agents.llm import LLMReviewError, request_structured_completion
+from app.google_drive.links import extract_google_drive_folder_url
 from app.prompting.intents import detect_intent_hints
 from app.prompting.schemas import PROMPT_PLAN_VERSION, PromptPlan, PromptPlanningContext
 
@@ -22,10 +23,14 @@ Allowed actions in this release:
 - show_active_project: show the active project.
 - get_status: show the latest review-job status for the active project.
 - import_attachment: import the attached document or ZIP into the selected project.
+- import_drive_folder: recursively import supported documents from the exact Google Drive
+  folder URL supplied by the user.
 - estimate_kolaudim: calculate the existing professional generation preflight.
 - generate_kolaudim: start one professional Akt Kolaudimi after confirmation.
 - deliver_latest_report: send the PDF from the referenced generation, or the latest
   completed report when the user explicitly asks only for an existing report.
+- upload_report_to_drive: upload the PDF from the referenced generation, or the latest
+  completed report, into the exact Google Drive folder URL supplied by the user.
 - answer_project_question: answer one informational question from the active project's
   technical dossier. This action never creates, changes, imports, generates, or sends files.
 - select_ai_model: select one exact model name for the user's already configured provider.
@@ -52,10 +57,15 @@ Rules:
 - Use import_attachment exactly once when context.has_attachment is true and the user
   asks to upload, import, process, or analyze the attached dossier. Generation actions
   may follow it and must depend on it through the action chain.
+- Use import_drive_folder when the user explicitly asks to import, read, process, or analyze
+  a Google Drive technical folder. It does not require a Telegram attachment.
 - For every generation request, add estimate_kolaudim followed by generate_kolaudim.
   generate_kolaudim must depend on estimate_kolaudim.
 - If the user asks to send/deliver the newly generated PDF, add deliver_latest_report,
   set arguments.job_ref to the generate_kolaudim step ID, and depend on that step.
+- If the user asks to save/upload the report into the linked Google Drive folder, add
+  upload_report_to_drive, set arguments.job_ref to the generate_kolaudim step ID for a new
+  generation, and depend on that step. Place it before deliver_latest_report when both apply.
 - Set arguments.name to null except for create_project and select_project.
 - Set arguments.model to null except for select_ai_model. Model selection requires an exact
   model name; otherwise ask a model clarification and suggest /ai_models.
@@ -63,7 +73,9 @@ Rules:
   AI action must depend directly on the model-selection step.
 - Set arguments.question to null. The server attaches the original user request only to
   answer_project_question after planning.
-- Set arguments.job_ref to null except for deliver_latest_report.
+- Set arguments.drive_url to null. The server attaches only a validated folder URL copied
+  from the original request to Google Drive actions after planning.
+- Set arguments.job_ref to null except for deliver_latest_report and upload_report_to_drive.
 - Never use import_attachment when context.has_attachment is false.
 - For a question about facts, dates, parties, contracts, technical evidence, conflicts,
   or VKM 610 in the active dossier, use answer_project_question. It may follow an explicit
@@ -226,10 +238,13 @@ def _apply_server_owned_fields(
                 action["requires_confirmation"] = True
             else:
                 action["requires_confirmation"] = False
-            if action_type == "deliver_latest_report":
-                normalized_arguments["job_ref"] = (
-                    normalized_arguments.get("job_ref") or latest_generation_id
-                )
+            normalized_arguments["drive_url"] = (
+                _server_owned_drive_url(prompt, context=context)
+                if action_type in {"import_drive_folder", "upload_report_to_drive"}
+                else None
+            )
+            if action_type in {"deliver_latest_report", "upload_report_to_drive"}:
+                normalized_arguments["job_ref"] = latest_generation_id
             else:
                 normalized_arguments["job_ref"] = None
             action["arguments"] = normalized_arguments
@@ -250,6 +265,20 @@ def _server_owned_question(
         f"Kërkesa fillestare: {pending.original_request}\n"
         f"Sqarimi i përdoruesit: {prompt}"
     )
+
+
+def _server_owned_drive_url(
+    prompt: str,
+    *,
+    context: PromptPlanningContext,
+) -> str | None:
+    current = extract_google_drive_folder_url(prompt)
+    if current is not None:
+        return current
+    pending = context.pending_clarification
+    if pending is None:
+        return None
+    return extract_google_drive_folder_url(pending.original_request)
 
 
 def _selected_clarification_option(

@@ -377,6 +377,39 @@ def test_consolidation_calculates_economic_variance_and_chronology_integrity() -
     assert result["integrity_issues"][0]["code"] == "DOSSIER-CHRONOLOGY-ORDER"
 
 
+def test_canonical_fallback_register_preserves_current_version_provenance() -> None:
+    version_id = uuid.uuid4()
+    analysis_run_id = uuid.uuid4()
+    result = consolidate_project_registers(
+        analyses=[],
+        documents=[],
+        document_records=[],
+        canonical_facts={
+            "kolaudator": {
+                "value": "Ing. Test",
+                "confidence": 0.91,
+                "confidence_level": "high",
+                "source_documents": ["kontrata.docx"],
+                "corroborating_source_count": 1,
+                "evidence": [
+                    {
+                        "source_document": "kontrata.docx",
+                        "source_file_version_id": str(version_id),
+                        "analysis_run_id": str(analysis_run_id),
+                        "source_chunk_id": str(uuid.uuid4()),
+                        "source_chunk_index": 2,
+                        "snippet": "Kolaudator: Ing. Test",
+                    }
+                ],
+            }
+        },
+    )
+
+    source = result["registers"][REGISTER_STAKEHOLDERS][0]["sources"][0]
+    assert source["file_version_id"] == str(version_id)
+    assert source["analysis_run_id"] == str(analysis_run_id)
+
+
 def test_consolidation_reports_incomplete_current_version_coverage() -> None:
     analyzed_id = uuid.uuid4()
     missing_id = uuid.uuid4()

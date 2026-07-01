@@ -89,9 +89,11 @@ def format_prompt_parse_summary(
     *,
     project_name: str,
     skipped_count: int,
+    source_label: str = "attachment",
+    skipped_label: str = "ZIP",
 ) -> str:
     lines = [
-        "Përpunimi i attachment-it përfundoi.",
+        f"Përpunimi i {source_label}-it përfundoi.",
         "",
         f"Projekti: {project_name}",
         f"Dokumente të gjurmuara: {summary.total}",
@@ -101,7 +103,7 @@ def format_prompt_parse_summary(
         f"Pa tekst të përdorshëm: {summary.counts.get('empty', 0)}",
         f"Formate të papërpunuara: {summary.counts.get('unsupported', 0)}",
         f"Dështuan: {summary.counts.get('failed', 0)}",
-        f"Të anashkaluara nga ZIP: {skipped_count}",
+        f"Të anashkaluara nga {skipped_label}: {skipped_count}",
     ]
     if summary.missing_version_count:
         lines.append(f"Versione që nuk u gjetën: {summary.missing_version_count}")

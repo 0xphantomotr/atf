@@ -6,6 +6,7 @@ from app.document_analysis.models import (
     DocumentAnalysisRun,
 )
 from app.files.models import DocumentChunk, FileVersion, ParsedDocument, ProjectFile
+from app.google_drive.models import GoogleDriveConnection, GoogleOAuthState
 from app.laws.models import LawArticle, LawChunk, LawDocument
 from app.notifications.models import Notification
 from app.prompting.models import PromptRun, PromptRunStep
@@ -22,6 +23,8 @@ __all__ = [
     "DocumentChunk",
     "FileVersion",
     "GeneratedOutput",
+    "GoogleDriveConnection",
+    "GoogleOAuthState",
     "LawArticle",
     "LawChunk",
     "LawDocument",

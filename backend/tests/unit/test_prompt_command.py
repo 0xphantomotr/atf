@@ -10,6 +10,11 @@ from pydantic import ValidationError
 from app.agents.llm import LLMReviewError
 from app.db import models as db_models  # noqa: F401
 from app.db.base import Base
+from app.google_drive.links import (
+    GoogleDriveLinkError,
+    extract_google_drive_folder_id,
+    extract_google_drive_folder_url,
+)
 from app.prompting.confirmation import (
     confirmation_callback_data,
     parse_confirmation_callback,
@@ -86,6 +91,7 @@ def _action(
     job_ref: str | None = None,
     question: str | None = None,
     model: str | None = None,
+    drive_url: str | None = None,
 ) -> dict:
     return {
         "id": f"step-{step}",
@@ -94,6 +100,7 @@ def _action(
             "name": name,
             "model": model,
             "question": question,
+            "drive_url": drive_url,
             "job_ref": job_ref,
         },
         "depends_on": depends_on or [],
@@ -130,6 +137,35 @@ def test_prompt_plan_requires_action_specific_arguments() -> None:
     with pytest.raises(ValidationError):
         PromptPlan.model_validate(
             _plan_payload([_action("show_active_project", name="Not allowed")])
+        )
+
+    with pytest.raises(ValidationError):
+        PromptPlan.model_validate(
+            _plan_payload(
+                [
+                    _action(
+                        "import_drive_folder",
+                        drive_url="https://example.com/drive/folders/not-google",
+                    )
+                ]
+            )
+        )
+
+
+def test_google_drive_folder_links_are_strictly_parsed() -> None:
+    folder_id = "1AbCdEfGhIjKlMnOpQrStUvWxYz"
+    standard = f"https://drive.google.com/drive/folders/{folder_id}?usp=sharing"
+    account_path = f"https://drive.google.com/drive/u/0/folders/{folder_id}"
+    open_link = f"https://drive.google.com/open?id={folder_id}"
+
+    assert extract_google_drive_folder_id(standard) == folder_id
+    assert extract_google_drive_folder_id(account_path) == folder_id
+    assert extract_google_drive_folder_id(open_link) == folder_id
+    assert extract_google_drive_folder_url(f"Importo {standard} dhe ruaje aty.") == standard
+
+    with pytest.raises(GoogleDriveLinkError):
+        extract_google_drive_folder_id(
+            f"https://evil.example/redirect?url=https://drive.google.com/drive/folders/{folder_id}"
         )
 
 
@@ -387,6 +423,47 @@ def test_planner_owns_generation_confirmation_and_delivery_reference() -> None:
 
     assert result.plan.actions[1].requires_confirmation
     assert result.plan.actions[2].arguments.job_ref == "step-2"
+
+
+def test_planner_owns_drive_url_and_generated_report_reference() -> None:
+    folder_id = "1AbCdEfGhIjKlMnOpQrStUvWxYz"
+    folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+
+    def fake_request(**kwargs):
+        return _plan_payload(
+            [
+                _action("estimate_kolaudim", step=1),
+                _action(
+                    "generate_kolaudim",
+                    step=2,
+                    depends_on=["step-1"],
+                ),
+                _action(
+                    "upload_report_to_drive",
+                    step=3,
+                    depends_on=["step-2"],
+                    job_ref="step-99",
+                    drive_url=(
+                        "https://drive.google.com/drive/folders/ModelInventedFolder123"
+                    ),
+                ),
+            ]
+        ), {}
+
+    result = plan_prompt(
+        f"Gjenero Akt Kolaudimi dhe ruaje këtu: {folder_url}",
+        context=PromptPlanningContext(
+            projects=[PromptProjectContext(name="Dosja A", is_active=True)],
+            has_ai_settings=True,
+        ),
+        ai_settings={"provider": "gemini", "model": "gemini-3.1-flash-lite"},
+        request_fn=fake_request,
+    )
+
+    upload = result.plan.actions[2]
+    assert upload.arguments.drive_url == folder_url
+    assert upload.arguments.job_ref == "step-2"
+    validate_prompt_plan(result.plan)
 
 
 def test_planner_attaches_original_question_as_server_owned_data() -> None:
