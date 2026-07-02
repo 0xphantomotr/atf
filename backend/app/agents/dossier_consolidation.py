@@ -233,9 +233,15 @@ ECONOMIC_FIELD_TERMS = (
     "invoice",
 )
 MATERIAL_FIELD_TERMS = (
+    "armatur",
     "material",
     "concrete",
+    "iron",
+    "mass",
+    "rebar",
+    "reinforcement",
     "steel",
+    "weight",
     "certificate",
     "laboratory",
     "test",

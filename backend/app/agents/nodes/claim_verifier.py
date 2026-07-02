@@ -9,6 +9,11 @@ from app.agents.claim_grounding import (
     evidence_is_current,
 )
 from app.agents.public_details import select_required_public_details
+from app.agents.section_evidence import (
+    build_section_evidence,
+    is_contextless_numeric_statement,
+    is_material_boilerplate,
+)
 from app.agents.state import AuditGraphState
 
 PLACEHOLDER_PATTERN = re.compile(r"(?:\?{2,}|_{3,}|\.{5,}|\bxxx\b|\btodo\b)", re.I)
@@ -194,6 +199,7 @@ def verify_kolaudim_claims(state: AuditGraphState) -> AuditGraphState:
     facts_present = _verify_canonical_facts(canonical, public_text, issues)
     _verify_conflicting_alternatives(dossier, public_text, issues)
     _verify_required_public_details(dossier, public_text, issues)
+    _verify_section_specific_evidence(draft, dossier, public_text, issues)
 
     major_issues = [issue for issue in issues if issue["severity"] == "major"]
     major_count = len(major_issues)
@@ -644,6 +650,82 @@ def _verify_required_public_details(
         )
 
 
+def _verify_section_specific_evidence(
+    draft: dict[str, Any],
+    dossier: dict[str, Any],
+    public_text: str,
+    issues: list[dict[str, Any]],
+) -> None:
+    section_evidence = build_section_evidence(dossier)
+    material = section_evidence.get("materials_reinforcement")
+    if not isinstance(material, dict):
+        return
+
+    required_values = [
+        str(item.get("source_value") or "").strip()
+        for item in material.get("quantities", [])
+        if isinstance(item, dict) and str(item.get("source_value") or "").strip()
+    ]
+    if required_values and not all(
+        _material_value_present(value, public_text) for value in required_values
+    ):
+        issues.append(
+            {
+                "code": "PUBLIC-SECTION-EVIDENCE-MISSING",
+                "severity": "major",
+                "message": (
+                    "Seksioni i materialeve nuk ruan sintezën konkrete të sasive "
+                    "projektuese të dokumentuara në dosje."
+                ),
+                "section_code": material.get("section_code"),
+                "section_title": material.get("section_title"),
+                "required_statement": material.get("statement"),
+                "required_values": required_values,
+                "evidence_ids": material.get("evidence_ids", []),
+            }
+        )
+
+    ledger = draft.get("claim_ledger")
+    if not isinstance(ledger, list):
+        return
+    for claim in ledger:
+        if not isinstance(claim, dict):
+            continue
+        statement = str(claim.get("statement") or "").strip()
+        if not statement:
+            continue
+        if is_material_boilerplate(statement):
+            issues.append(
+                {
+                    "code": "PUBLIC-MATERIAL-GENERIC",
+                    "severity": "major",
+                    "message": (
+                        "Seksioni i materialeve përdor formulim të përgjithshëm në "
+                        "vend të fakteve konkrete që përmban dosja."
+                    ),
+                    "claim_id": claim.get("claim_id"),
+                    "section_code": claim.get("section_code"),
+                    "statement": statement,
+                    "required_statement": material.get("statement"),
+                    "evidence_ids": material.get("evidence_ids", []),
+                }
+            )
+        if is_contextless_numeric_statement(statement):
+            issues.append(
+                {
+                    "code": "PUBLIC-CONTEXTLESS-NUMERIC-LIST",
+                    "severity": "major",
+                    "message": (
+                        "Teksti publik përmban një listë numerike pa etiketa, njësi "
+                        "ose kuptim teknik të provueshëm."
+                    ),
+                    "claim_id": claim.get("claim_id"),
+                    "section_code": claim.get("section_code"),
+                    "statement": statement,
+                }
+            )
+
+
 def _verify_conflicting_alternatives(
     dossier: object,
     public_text: str,
@@ -881,6 +963,11 @@ def _correction_instruction(issue: dict[str, Any]) -> dict[str, Any]:
         "source_documents",
         "register",
         "evidence_ids",
+        "section_code",
+        "section_title",
+        "statement",
+        "required_statement",
+        "required_values",
     ):
         if key in issue:
             instruction[key] = issue[key]
@@ -917,6 +1004,21 @@ def _correction_message(issue: dict[str, Any]) -> str:
             "Zëvendëso alternative_value me selected_value në tekstin publik dhe "
             "në claim_ledger për fushën përkatëse. Mos e përdor alternative_value "
             "si fakt publik; përdor evidence_ids e dhëna për vlerën kanonike."
+        )
+    if code == "PUBLIC-SECTION-EVIDENCE-MISSING":
+        return (
+            "Përfshi required_statement në seksionin e materialeve duke ruajtur "
+            "evidence_ids. Paraqiti sasitë vetëm si sasi projektuese të dokumentuara."
+        )
+    if code == "PUBLIC-MATERIAL-GENERIC":
+        return (
+            "Hiq formulimin e përgjithshëm për materiale/prova dhe zëvendësoje me "
+            "required_statement dhe evidence_ids e dhëna."
+        )
+    if code == "PUBLIC-CONTEXTLESS-NUMERIC-LIST":
+        return (
+            "Hiq listën numerike pa etiketa. Mos publiko vlera vizatimi pa emërtim, "
+            "njësi dhe lidhje të qartë me elementin teknik."
         )
     return str(issue.get("message") or "Korrigjo çështjen e verifikimit.")
 

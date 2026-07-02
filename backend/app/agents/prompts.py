@@ -104,6 +104,12 @@ Rregulla të detyrueshme:
 - Përfshi në trup vlerat e dhëna te required_public_details kur janë të pranishme:
   leje/protokolle, zonë kadastrale/pronë, kontrata/vlera/afate, data fazash,
   sipërfaqe/parametra dhe materiale/prova.
+- section_evidence përmban sinteza të pastruara për seksione të caktuara. Kur
+  materials_reinforcement është i pranishëm, përdor statement dhe evidence_ids e tij;
+  mos publiko lista numerike pa etiketa ose fragmente të bashkuara nga vizatimet.
+- Sasitë e armaturës përshkruaji si specifikime/sasi projektuese të dokumentuara.
+  Mos i paraqit si matje faktike në objekt dhe mos shto automatikisht paragraf për
+  mungesë provash laboratorike, certifikatash ose verifikim të mëtejshëm.
 - Mos shkruaj paragraf publik që nuk mund ta lidhësh me të paktën një evidence_id.
 - Nëse një fakt material nuk provohet, mos e zëvendëso me placeholder. Formuloje
   kufizimin vetëm në paragrafin përkatës ose në konkluzion dhe regjistroje shkurt te

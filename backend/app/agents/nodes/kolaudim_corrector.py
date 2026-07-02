@@ -8,6 +8,12 @@ from app.agents.claim_grounding import (
 )
 from app.agents.llm import AIQuotaLimitError, LLMReviewError, request_kolaudim_correction
 from app.agents.nodes.kolaudim_writer import _normalize_kolaudim_draft
+from app.agents.section_evidence import (
+    MATERIAL_SECTION_CODE,
+    MATERIAL_SECTION_TITLE,
+    is_contextless_numeric_statement,
+    is_material_boilerplate,
+)
 from app.agents.state import AuditGraphState
 from app.ai.stages import ai_settings_for_stage
 
@@ -124,6 +130,7 @@ def correct_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
         corrected,
         evidence_catalog=catalog,
     )
+    _preserve_section_structure(normalized, original_draft=draft)
     _apply_verification_replacements(
         normalized,
         verification,
@@ -141,6 +148,102 @@ def correct_kolaudim_draft(state: AuditGraphState) -> AuditGraphState:
         "model": ai_settings.get("model"),
     }
     return state
+
+
+def _preserve_section_structure(
+    corrected_draft: dict[str, Any],
+    *,
+    original_draft: dict[str, Any],
+) -> None:
+    """Keep correction content inside the already validated public section skeleton."""
+    original_sections = original_draft.get("sections")
+    corrected_sections = corrected_draft.get("sections")
+    if not isinstance(original_sections, list) or not 10 <= len(original_sections) <= 12:
+        return
+    if not isinstance(corrected_sections, list):
+        corrected_sections = []
+
+    corrected_by_code = {
+        str(section.get("code") or ""): section
+        for section in corrected_sections
+        if isinstance(section, dict) and str(section.get("code") or "")
+    }
+    restored_codes: set[str] = set()
+    final_sections: list[dict[str, Any]] = []
+    for original in original_sections:
+        if not isinstance(original, dict):
+            continue
+        code = str(original.get("code") or "")
+        corrected = corrected_by_code.get(code)
+        if corrected is not None:
+            final_sections.append(corrected)
+            continue
+        final_sections.append(dict(original))
+        restored_codes.add(code)
+
+    if not 10 <= len(final_sections) <= 12:
+        return
+    corrected_draft["sections"] = final_sections
+    _align_claim_ledger_to_sections(
+        corrected_draft,
+        original_draft=original_draft,
+        restored_codes=restored_codes,
+    )
+
+
+def _align_claim_ledger_to_sections(
+    corrected_draft: dict[str, Any],
+    *,
+    original_draft: dict[str, Any],
+    restored_codes: set[str],
+) -> None:
+    corrected_ledger = corrected_draft.get("claim_ledger")
+    original_ledger = original_draft.get("claim_ledger")
+    if not isinstance(corrected_ledger, list):
+        corrected_ledger = []
+    if not isinstance(original_ledger, list):
+        original_ledger = []
+
+    allowed_statements = {
+        statement
+        for section in corrected_draft.get("sections", [])
+        if isinstance(section, dict)
+        for statement in _section_paragraphs(section)
+    }
+    summary = str(corrected_draft.get("executive_summary") or "").strip()
+    if summary:
+        allowed_statements.add(summary)
+
+    aligned = [
+        claim
+        for claim in corrected_ledger
+        if isinstance(claim, dict)
+        and str(claim.get("statement") or "").strip() in allowed_statements
+        and str(claim.get("section_code") or "") not in restored_codes
+    ]
+    existing_statements = {
+        str(claim.get("statement") or "").strip()
+        for claim in aligned
+        if isinstance(claim, dict)
+    }
+    for claim in original_ledger:
+        if not isinstance(claim, dict):
+            continue
+        statement = str(claim.get("statement") or "").strip()
+        section_code = str(claim.get("section_code") or "")
+        if (
+            section_code in restored_codes
+            and statement in allowed_statements
+            and statement not in existing_statements
+        ):
+            aligned.append(dict(claim))
+            existing_statements.add(statement)
+    corrected_draft["claim_ledger"] = aligned
+
+
+def _section_paragraphs(section: dict[str, Any]) -> list[str]:
+    body = str(section.get("body") or "")
+    return [paragraph.strip() for paragraph in body.split("\n\n") if paragraph.strip()]
 
 
 def enforce_publishable_kolaudim(state: AuditGraphState) -> AuditGraphState:
@@ -481,6 +584,164 @@ def _apply_verification_replacements(
             evidence_catalog=evidence_catalog or {},
         )
 
+    _remove_public_technical_noise(draft, issues)
+    for issue in issues:
+        if (
+            isinstance(issue, dict)
+            and issue.get("code") == "PUBLIC-SECTION-EVIDENCE-MISSING"
+        ):
+            _append_section_evidence(
+                draft,
+                issue,
+                evidence_catalog=evidence_catalog or {},
+            )
+
+
+def _remove_public_technical_noise(
+    draft: dict[str, Any],
+    issues: list[object],
+) -> None:
+    remove_material_generic = any(
+        isinstance(issue, dict) and issue.get("code") == "PUBLIC-MATERIAL-GENERIC"
+        for issue in issues
+    )
+    remove_numeric_noise = any(
+        isinstance(issue, dict)
+        and issue.get("code") == "PUBLIC-CONTEXTLESS-NUMERIC-LIST"
+        for issue in issues
+    )
+    if not remove_material_generic and not remove_numeric_noise:
+        return
+
+    ledger = draft.get("claim_ledger")
+    if not isinstance(ledger, list):
+        return
+    retained: list[object] = []
+    removed_statements: list[str] = []
+    for claim in ledger:
+        if not isinstance(claim, dict):
+            retained.append(claim)
+            continue
+        statement = str(claim.get("statement") or "").strip()
+        should_remove = (
+            remove_material_generic and is_material_boilerplate(statement)
+        ) or (
+            remove_numeric_noise and is_contextless_numeric_statement(statement)
+        )
+        if should_remove:
+            removed_statements.append(statement)
+        else:
+            retained.append(claim)
+    draft["claim_ledger"] = retained
+    for statement in removed_statements:
+        _remove_statement_from_public_draft(draft, statement)
+
+
+def _remove_statement_from_public_draft(
+    draft: dict[str, Any],
+    statement: str,
+) -> None:
+    if not statement:
+        return
+    if isinstance(draft.get("executive_summary"), str):
+        draft["executive_summary"] = _remove_paragraph(
+            draft["executive_summary"],
+            statement,
+        )
+    sections = draft.get("sections")
+    if not isinstance(sections, list):
+        return
+    for section in sections:
+        if isinstance(section, dict) and isinstance(section.get("body"), str):
+            section["body"] = _remove_paragraph(section["body"], statement)
+
+
+def _remove_paragraph(body: str, statement: str) -> str:
+    paragraphs = [paragraph.strip() for paragraph in body.split("\n\n")]
+    retained = [paragraph for paragraph in paragraphs if paragraph != statement]
+    if len(retained) != len(paragraphs):
+        return "\n\n".join(paragraph for paragraph in retained if paragraph)
+    return re.sub(r"\n{3,}", "\n\n", body.replace(statement, "")).strip()
+
+
+def _append_section_evidence(
+    draft: dict[str, Any],
+    issue: dict[str, Any],
+    *,
+    evidence_catalog: dict[str, dict[str, Any]],
+) -> None:
+    statement = str(issue.get("required_statement") or "").strip()
+    required_values = [
+        str(value).strip()
+        for value in issue.get("required_values", [])
+        if str(value).strip()
+    ]
+    if not statement or (
+        required_values
+        and all(_draft_contains_value(draft, value) for value in required_values)
+    ):
+        return
+
+    section_code = str(issue.get("section_code") or MATERIAL_SECTION_CODE)
+    section_title = str(issue.get("section_title") or MATERIAL_SECTION_TITLE)
+    section = _find_or_create_material_section(
+        draft,
+        section_code=section_code,
+        section_title=section_title,
+    )
+    body = str(section.get("body") or "").strip()
+    section["body"] = f"{body}\n\n{statement}".strip()
+
+    evidence_ids = [
+        str(evidence_id)
+        for evidence_id in issue.get("evidence_ids", [])
+        if str(evidence_id).strip()
+    ]
+    ledger = draft.setdefault("claim_ledger", [])
+    if not isinstance(ledger, list):
+        ledger = []
+        draft["claim_ledger"] = ledger
+    ledger.append(
+        {
+            "claim_id": f"deterministic_section_evidence:{len(ledger)}",
+            "section_code": str(section.get("code") or section_code),
+            "statement": statement,
+            "claim_type": "documented_fact",
+            "conclusion_level": "proven",
+            "evidence_ids": evidence_ids,
+            "confidence": 1.0,
+            "source_references": claim_source_references(
+                evidence_ids,
+                evidence_catalog,
+            ),
+        }
+    )
+
+
+def _find_or_create_material_section(
+    draft: dict[str, Any],
+    *,
+    section_code: str,
+    section_title: str,
+) -> dict[str, Any]:
+    sections = draft.setdefault("sections", [])
+    if not isinstance(sections, list):
+        sections = []
+        draft["sections"] = sections
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        code = str(section.get("code") or "").lower()
+        title = str(section.get("title") or "").lower()
+        if code == section_code or any(
+            term in f"{code} {title}"
+            for term in ("material", "quality", "cilësi", "armatur", "prova")
+        ):
+            return section
+    section = {"code": section_code, "title": section_title, "body": ""}
+    sections.append(section)
+    return section
+
 
 def _append_required_public_detail(
     draft: dict[str, Any],
@@ -571,7 +832,7 @@ def _detail_statement(field: str, value: str) -> str:
 
 
 def _draft_contains_value(draft: dict[str, Any], value: str) -> bool:
-    normalized = re.sub(r"\s+", "", value).casefold()
+    normalized = re.sub(r"[^a-z0-9]+", "", value.casefold())
     if not normalized:
         return True
     public_parts = [
@@ -583,7 +844,11 @@ def _draft_contains_value(draft: dict[str, Any], value: str) -> bool:
         for section in draft.get("sections", [])
         if isinstance(section, dict)
     )
-    public_text = re.sub(r"\s+", "", " ".join(public_parts)).casefold()
+    public_text = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        " ".join(public_parts).casefold(),
+    )
     return normalized in public_text
 
 

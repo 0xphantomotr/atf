@@ -8,6 +8,7 @@ from app.agents.llm import (
     request_specialist_review,
     specialist_review_input_token_budget,
 )
+from app.agents.section_evidence import is_public_register_entry, public_register_value
 from app.agents.state import AuditGraphState
 from app.ai.stages import ai_settings_for_stage
 from app.core.config import settings
@@ -163,8 +164,8 @@ def _build_specialist_review_input(
             continue
         register = str(register_name)
         register_ids[register] = []
-        for index, entry in enumerate(entries[:REGISTER_ENTRY_LIMIT]):
-            if not isinstance(entry, dict):
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not is_public_register_entry(entry):
                 continue
             evidence_id = f"{register}:{index}"
             evidence_catalog[evidence_id] = _compact_register_evidence(
@@ -173,6 +174,8 @@ def _build_specialist_review_input(
                 entry,
             )
             register_ids[register].append(evidence_id)
+            if len(register_ids[register]) >= REGISTER_ENTRY_LIMIT:
+                break
 
     domains = [
         {
@@ -218,7 +221,7 @@ def _compact_register_evidence(
         "kind": "register_entry",
         "register": register,
         "field_name": entry.get("field_name"),
-        "value": entry.get("value"),
+        "value": public_register_value(entry),
         "normalized_value": entry.get("normalized_value"),
         "confidence": entry.get("confidence"),
         "confidence_level": entry.get("confidence_level"),

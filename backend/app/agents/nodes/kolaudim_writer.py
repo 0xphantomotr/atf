@@ -7,12 +7,17 @@ from app.agents.claim_grounding import (
     claim_source_references,
     register_evidence_id,
 )
-from app.agents.public_formatting import format_public_text
-from app.agents.public_details import select_required_public_details
 from app.agents.llm import (
     LLMReviewError,
     kolaudim_draft_input_token_budget,
     request_kolaudim_draft,
+)
+from app.agents.public_details import select_required_public_details
+from app.agents.public_formatting import format_public_text
+from app.agents.section_evidence import (
+    build_section_evidence,
+    is_public_register_entry,
+    public_register_value,
 )
 from app.agents.state import AuditGraphState
 from app.ai.stages import ai_settings_for_stage
@@ -185,6 +190,7 @@ def _build_kolaudim_writer_input(
         "job": state.get("job", {}),
         "professional_dossier": dossier,
         "required_public_details": select_required_public_details(raw_dossier),
+        "section_evidence": build_section_evidence(raw_dossier),
         "contract_reference_policy": {
             "role_specific_references": dossier.get("contract_reference_summary", {}),
             "rules": [
@@ -226,6 +232,13 @@ def _build_kolaudim_writer_input(
             "çdo formulimi tjetër.",
             "Përdor regjistrat profesionalë për kronologjinë, punimet, materialet, "
             "provat, kontratat dhe vlerat.",
+            "Për seksionet teknike përdor section_evidence si sintezën prioritare "
+            "të fakteve të lexueshme dhe ruaj evidence_ids e saj.",
+            "Kur materials_reinforcement është i pranishëm, përfshi statement-in "
+            "e tij në seksionin e materialeve. Përshkruaji sasitë vetëm si sasi "
+            "projektuese të dokumentuara, jo si matje faktike ose prova laboratorike.",
+            "Mos zëvendëso detajet konkrete të section_evidence me formulime të "
+            "përgjithshme për materiale të deklaruara ose prova që kërkojnë verifikim.",
             "Përdor memorandat specialistike vetëm si sintezë; çdo fakt duhet të "
             "mbetet në përputhje me regjistrat dhe faktet kanonike.",
             "Çdo paragraf publik duhet të ketë claim_type dhe evidence_ids. Përdor "
@@ -772,14 +785,19 @@ def _compact_registers(value: object) -> dict[str, list[dict[str, Any]]]:
         if not isinstance(entries, list):
             continue
         register_name = str(register)
-        compact[register_name] = [
-            _compact_register_entry(
-                entry,
-                evidence_id=register_evidence_id(register_name, index),
+        compact_entries: list[dict[str, Any]] = []
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not is_public_register_entry(entry):
+                continue
+            compact_entries.append(
+                _compact_register_entry(
+                    entry,
+                    evidence_id=register_evidence_id(register_name, index),
+                )
             )
-            for index, entry in enumerate(entries[: limits.get(register_name, 40)])
-            if isinstance(entry, dict)
-        ]
+            if len(compact_entries) >= limits.get(register_name, 40):
+                break
+        compact[register_name] = compact_entries
     return compact
 
 
@@ -791,7 +809,7 @@ def _compact_register_entry(
     return {
         "evidence_id": evidence_id,
         "field_name": entry.get("field_name"),
-        "value": entry.get("value"),
+        "value": public_register_value(entry),
         "normalized_value": entry.get("normalized_value"),
         "confidence_level": entry.get("confidence_level"),
         "source_documents": _string_list(entry.get("source_documents"), limit=6),
@@ -1141,6 +1159,11 @@ def _writer_input_evidence_ids(writer_input: dict[str, Any]) -> list[str]:
         for item in writer_input.get("required_public_details", [])
         if isinstance(item, dict) and item.get("evidence_id")
     )
+    section_evidence = writer_input.get("section_evidence", {})
+    if isinstance(section_evidence, dict):
+        for section in section_evidence.values():
+            if isinstance(section, dict):
+                ids.extend(_string_list(section.get("evidence_ids")))
     specialist = writer_input.get("specialist_memoranda", {})
     if isinstance(specialist, dict):
         for memorandum in specialist.get("memoranda", []):
