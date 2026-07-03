@@ -17,6 +17,10 @@ PromptActionType = Literal[
     "select_project",
     "show_active_project",
     "get_status",
+    "show_drive_folder",
+    "bind_drive_folder",
+    "check_drive_folder",
+    "sync_drive_folder",
     "import_attachment",
     "import_drive_folder",
     "estimate_kolaudim",
@@ -106,10 +110,14 @@ class PromptAction(StrictModel):
             raise ValueError("answer_project_question requires a question.")
         if self.type != "answer_project_question" and self.arguments.question is not None:
             raise ValueError(f"{self.type} does not accept a question.")
-        drive_actions = {"import_drive_folder", "upload_report_to_drive"}
-        if self.type in drive_actions and self.arguments.drive_url is None:
+        required_drive_url_actions = {"bind_drive_folder", "import_drive_folder"}
+        optional_drive_url_actions = {"check_drive_folder", "upload_report_to_drive"}
+        if self.type in required_drive_url_actions and self.arguments.drive_url is None:
             raise ValueError(f"{self.type} requires a Google Drive folder URL.")
-        if self.type not in drive_actions and self.arguments.drive_url is not None:
+        if (
+            self.type not in required_drive_url_actions | optional_drive_url_actions
+            and self.arguments.drive_url is not None
+        ):
             raise ValueError(f"{self.type} does not accept a Google Drive folder URL.")
         job_actions = {"deliver_latest_report", "upload_report_to_drive"}
         if self.type not in job_actions and self.arguments.job_ref is not None:

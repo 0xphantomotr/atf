@@ -124,7 +124,7 @@ async def _advance_plan(
             user_id=run.user_id,
         )
 
-        if action.type in {"import_attachment", "import_drive_folder"}:
+        if action.type in {"import_attachment", "import_drive_folder", "sync_drive_folder"}:
             prompting_service.queue_prompt_notification(
                 run,
                 key=f"{action.type}_imported",
@@ -271,6 +271,25 @@ async def _advance_document_wait(
             skipped_label="Google Drive" if import_data.get("drive_folder_id") else "ZIP",
         ),
     )
+    changed_count = (
+        int(import_data.get("uploaded_count") or 0)
+        + int(import_data.get("changed_count") or 0)
+        + int(import_data.get("deleted_count") or 0)
+    )
+    plan = PromptPlan.model_validate(run.plan)
+    requests_generation = any(
+        action.type == "generate_kolaudim" for action in plan.actions
+    )
+    if changed_count and not requests_generation:
+        prompting_service.queue_prompt_notification(
+            run,
+            key="drive_changes_ready_for_regeneration",
+            body=(
+                "Dosja e lidhur ka ndryshuar dhe dokumentet e reja janë përpunuar.\n\n"
+                "Dëshironi një Akt-Kolaudimi të përditësuar? Përdorni:\n"
+                "/prompt Gjenero Akt Kolaudimi për projektin aktiv dhe ma dërgo PDF-në"
+            ),
+        )
     run.status = "queued"
     run.worker_lease_until = None
     await session.commit()

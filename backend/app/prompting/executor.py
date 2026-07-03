@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai import service as ai_service
 from app.google_drive.service import (
     GoogleDriveError,
+    bind_google_drive_folder,
+    google_drive_binding_status,
     import_google_drive_folder,
+    preflight_google_drive_folder,
+    sync_google_drive_folder,
     upload_generated_pdf_to_drive,
 )
 from app.projects import service as projects_service
@@ -258,6 +262,120 @@ async def _execute_action(
             None,
         )
 
+    if action_type == "show_drive_folder":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        binding = await google_drive_binding_status(
+            session,
+            project_id=project.id,
+            user_id=user_id,
+        )
+        if binding is None:
+            raise PromptExecutionError(
+                "drive_folder_not_bound",
+                "Projekti aktiv nuk ka folder Google Drive të lidhur.",
+            )
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=_drive_binding_message(binding),
+                data={
+                    "project_id": str(project.id),
+                    "drive_folder_id": binding.folder_id,
+                    "drive_folder_name": binding.folder_name,
+                    "drive_folder_url": binding.folder_url,
+                    "sync_status": binding.sync_status,
+                    "last_sync_summary": binding.last_sync_summary,
+                },
+            ),
+            project.id,
+            None,
+        )
+
+    if action_type == "bind_drive_folder":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        try:
+            binding = await bind_google_drive_folder(
+                session,
+                project_id=project.id,
+                user_id=user_id,
+                folder_url=_require_drive_url(arguments),
+            )
+        except GoogleDriveError as exc:
+            raise PromptExecutionError("drive_folder_bind_failed", str(exc)) from exc
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=(
+                    f"Folderi Google Drive u lidh me projektin {project.name}: "
+                    f"{binding.folder_name}"
+                ),
+                data={
+                    "project_id": str(project.id),
+                    "drive_folder_id": binding.folder_id,
+                    "drive_folder_name": binding.folder_name,
+                    "drive_folder_url": binding.folder_url,
+                },
+            ),
+            project.id,
+            None,
+        )
+
+    if action_type == "check_drive_folder":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        try:
+            preflight = await preflight_google_drive_folder(
+                session,
+                project_id=project.id,
+                user_id=user_id,
+                folder_url=arguments.get("drive_url"),
+            )
+        except GoogleDriveError as exc:
+            raise PromptExecutionError("drive_preflight_failed", str(exc)) from exc
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=_drive_preflight_message(preflight),
+                data={
+                    "project_id": str(project.id),
+                    "drive_folder_id": preflight.folder_id,
+                    "drive_folder_name": preflight.folder_name,
+                    "readable": preflight.readable,
+                    "writable": preflight.writable,
+                    "new_count": preflight.new_count,
+                    "changed_count": preflight.changed_count,
+                    "unchanged_count": preflight.unchanged_count,
+                    "deleted_count": preflight.deleted_count,
+                    "skipped_count": preflight.skipped_count,
+                },
+            ),
+            project.id,
+            None,
+        )
+
+    if action_type == "sync_drive_folder":
+        project = await _prompt_project(session, run=run, user_id=user_id)
+        try:
+            sync_result = await sync_google_drive_folder(
+                session,
+                project_id=project.id,
+                user_id=user_id,
+            )
+        except GoogleDriveError as exc:
+            raise PromptExecutionError("drive_folder_sync_failed", str(exc)) from exc
+        return (
+            PromptActionResult(
+                step_key="",
+                action_type=action_type,
+                message=_drive_sync_message(sync_result),
+                data=sync_result.as_step_data(),
+            ),
+            project.id,
+            None,
+        )
+
     if action_type == "import_attachment":
         project = await get_active_project(session, user_id=user_id)
         if project is None:
@@ -318,7 +436,9 @@ async def _execute_action(
                 message=(
                     f"Folderi Google Drive u importua: {import_result.folder_name}\n"
                     f"Dokumente të reja: {import_result.uploaded_count}\n"
-                    f"Dokumente ekzistuese të ripërdorura: {import_result.reused_count}\n"
+                    f"Dokumente të ndryshuara: {import_result.changed_count}\n"
+                    f"Dokumente të pandryshuara: {import_result.reused_count}\n"
+                    f"Dokumente të hequra nga burimi: {import_result.deleted_count}\n"
                     f"Të anashkaluara: {len(import_result.skipped)}"
                 ),
                 data=import_result.as_step_data(),
@@ -420,7 +540,7 @@ async def _execute_action(
                 expected_review_job_id=job.id,
                 prompt_run_id=run.id,
                 user_id=user_id,
-                folder_url=_require_drive_url(arguments),
+                folder_url=arguments.get("drive_url"),
             )
         except GoogleDriveError as exc:
             raise PromptExecutionError("drive_report_upload_failed", str(exc)) from exc
@@ -439,6 +559,8 @@ async def _execute_action(
                     "output_id": str(pdf_output.id),
                     "drive_file_id": uploaded.file_id,
                     "drive_web_view_link": uploaded.web_view_link,
+                    "drive_output_folder_id": uploaded.output_folder_id,
+                    "drive_output_folder_name": uploaded.output_folder_name,
                     "reused": uploaded.reused,
                 },
             ),
@@ -664,6 +786,52 @@ def _projects_message(projects: list[Project], *, active_project_id: UUID | None
         suffix = " (aktiv)" if project.id == active_project_id else ""
         lines.append(f"{index}. {project.name}{suffix}")
     return "\n".join(lines)
+
+
+def _drive_binding_message(binding) -> str:
+    summary = dict(binding.last_sync_summary or {})
+    lines = [
+        f"Projekti: {binding.project_name}",
+        f"Folderi Drive: {binding.folder_name}",
+        f"Linku: {binding.folder_url}",
+        f"Statusi i sinkronizimit: {binding.sync_status}",
+    ]
+    if binding.last_sync_completed_at is not None:
+        lines.append(f"Sinkronizimi i fundit: {binding.last_sync_completed_at.isoformat()}")
+    if summary:
+        lines.append(
+            "Ndryshimet e fundit: "
+            f"{summary.get('new_count', 0)} të reja, "
+            f"{summary.get('changed_count', 0)} të ndryshuara, "
+            f"{summary.get('deleted_count', 0)} të hequra"
+        )
+    return "\n".join(lines)
+
+
+def _drive_preflight_message(preflight) -> str:
+    return (
+        "Kontrolli i Google Drive\n\n"
+        f"Folderi: {preflight.folder_name}\n"
+        f"Lexim: {'Po' if preflight.readable else 'Jo'}\n"
+        f"Shkrim: {'Po' if preflight.writable else 'Jo'}\n"
+        f"Dokumente të mbështetura: {preflight.supported_count}\n"
+        f"Të reja: {preflight.new_count}\n"
+        f"Të ndryshuara: {preflight.changed_count}\n"
+        f"Të pandryshuara: {preflight.unchanged_count}\n"
+        f"Të hequra nga Drive: {preflight.deleted_count}\n"
+        f"Të anashkaluara: {preflight.skipped_count}"
+    )
+
+
+def _drive_sync_message(result) -> str:
+    return (
+        f"Google Drive u sinkronizua: {result.folder_name}\n"
+        f"Dokumente të reja: {result.uploaded_count}\n"
+        f"Dokumente të ndryshuara: {result.changed_count}\n"
+        f"Dokumente të pandryshuara: {result.reused_count}\n"
+        f"Dokumente të hequra nga burimi: {result.deleted_count}\n"
+        f"Të anashkaluara: {len(result.skipped)}"
+    )
 
 
 def _result_from_step(data: dict, step_key: str, action_type: str) -> PromptActionResult:

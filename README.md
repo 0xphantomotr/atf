@@ -19,7 +19,8 @@ final review by a qualified kolaudator.
 - Bounded follow-up questions, clarification prompts and action previews
 - OpenAI, Gemini and Groq user-provided API keys
 - Background processing, quota handling and automatic Telegram PDF delivery
-- Google Drive folder import and generated-PDF upload through per-user OAuth
+- Bound Google Drive workspaces with incremental synchronization and change detection
+- Versioned PDF output in a managed `Kolaudimi/` Drive subfolder
 
 AI-generated documents are drafts. A qualified professional must verify the source
 documents, conclusions and final signatory information before official use.
@@ -53,6 +54,9 @@ Common commands:
 /ai_key gemini YOUR_API_KEY
 /ai_model MODEL_NAME
 /google_connect
+/google_folder LINKU_DRIVE
+/google_check
+/google_sync
 /google_status
 /gjenero
 /status
@@ -84,6 +88,11 @@ https://atf.kolaudimi.dev/integrations/google-drive/callback
 Configure `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and
 `GOOGLE_OAUTH_REDIRECT_URI` in `.env`. Each user then runs `/google_connect` once and
 authorizes the Drive account that owns or can edit the linked folder.
+
+After linking the account, bind the active project with `/google_folder LINKU_DRIVE`.
+`/google_check` previews access and pending changes without importing; `/google_sync`
+downloads only new or changed files, marks source deletions and reuses analysis for unchanged
+versions. Generated reports are stored with sequential version names under `Kolaudimi/`.
 
 The application requests Drive access because it must read arbitrary linked technical
 folders and upload the generated PDF. Keep the OAuth app in testing with explicit test

@@ -66,6 +66,7 @@ PROMPT_HELP = (
     "/prompt Shfaq statusin\n"
     "/prompt Përdor modelin gemini-3.1-flash-lite\n"
     "/prompt Kush është sipërmarrësi sipas dosjes aktive?\n\n"
+    "/prompt Sinkronizo folderin Drive të projektit aktiv\n"
     "/prompt Importo dosjen nga LINKU_DRIVE, gjenero Akt-Kolaudimin dhe ruaje "
     "në të njëjtin folder\n\n"
     "Me attachment:\n"

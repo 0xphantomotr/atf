@@ -145,6 +145,36 @@ def test_prompt_plan_requires_action_specific_arguments() -> None:
 
     with pytest.raises(ValidationError):
         PromptPlan.model_validate(
+            _plan_payload([_action("bind_drive_folder")])
+        )
+
+    linked_upload = PromptPlan.model_validate(
+        _plan_payload([_action("upload_report_to_drive")])
+    )
+    assert linked_upload.actions[0].arguments.drive_url is None
+
+
+def test_drive_sync_actions_are_valid_and_detected() -> None:
+    plan = PromptPlan.model_validate(
+        _plan_payload(
+            [
+                _action("sync_drive_folder", step=1),
+                _action("estimate_kolaudim", step=2, depends_on=["step-1"]),
+                _action(
+                    "generate_kolaudim",
+                    step=3,
+                    depends_on=["step-2"],
+                    requires_confirmation=True,
+                ),
+            ]
+        )
+    )
+
+    validate_prompt_plan(plan)
+    assert detect_intent_hints("Sinkronizo folderin Drive") == ["sync_drive_folder"]
+
+    with pytest.raises(ValidationError):
+        PromptPlan.model_validate(
             _plan_payload(
                 [
                     _action(

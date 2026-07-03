@@ -22,6 +22,12 @@ Allowed actions in this release:
 - select_project: select one existing project by its exact displayed name.
 - show_active_project: show the active project.
 - get_status: show the latest review-job status for the active project.
+- show_drive_folder: show the Google Drive folder currently bound to the active project.
+- bind_drive_folder: bind the exact Google Drive folder URL to the active project without
+  importing it.
+- check_drive_folder: check read/write access and preview new, changed, unchanged, deleted,
+  and skipped files. Use the supplied URL, or the bound folder when no URL is supplied.
+- sync_drive_folder: incrementally synchronize the active project's already bound folder.
 - import_attachment: import the attached document or ZIP into the selected project.
 - import_drive_folder: recursively import supported documents from the exact Google Drive
   folder URL supplied by the user.
@@ -30,7 +36,8 @@ Allowed actions in this release:
 - deliver_latest_report: send the PDF from the referenced generation, or the latest
   completed report when the user explicitly asks only for an existing report.
 - upload_report_to_drive: upload the PDF from the referenced generation, or the latest
-  completed report, into the exact Google Drive folder URL supplied by the user.
+  completed report, into the managed Kolaudimi subfolder of the project's bound Drive
+  folder. An explicit Drive URL may be used to bind/change the folder first.
 - answer_project_question: answer one informational question from the active project's
   technical dossier. This action never creates, changes, imports, generates, or sends files.
 - select_ai_model: select one exact model name for the user's already configured provider.
@@ -59,6 +66,10 @@ Rules:
   may follow it and must depend on it through the action chain.
 - Use import_drive_folder when the user explicitly asks to import, read, process, or analyze
   a Google Drive technical folder. It does not require a Telegram attachment.
+- Use bind_drive_folder when the user asks only to link/store a Drive folder without import.
+- Use sync_drive_folder when the user asks to update or synchronize the linked Drive folder.
+- Use check_drive_folder for access checks or a preview of pending Drive changes.
+- Use show_drive_folder when the user asks which Drive folder is linked.
 - For every generation request, add estimate_kolaudim followed by generate_kolaudim.
   generate_kolaudim must depend on estimate_kolaudim.
 - If the user asks to send/deliver the newly generated PDF, add deliver_latest_report,
@@ -74,7 +85,8 @@ Rules:
 - Set arguments.question to null. The server attaches the original user request only to
   answer_project_question after planning.
 - Set arguments.drive_url to null. The server attaches only a validated folder URL copied
-  from the original request to Google Drive actions after planning.
+  from the original request to Drive actions that accept a URL. Upload and preflight may
+  use the project's existing bound folder when the request contains no URL.
 - Set arguments.job_ref to null except for deliver_latest_report and upload_report_to_drive.
 - Never use import_attachment when context.has_attachment is false.
 - For a question about facts, dates, parties, contracts, technical evidence, conflicts,
@@ -240,7 +252,13 @@ def _apply_server_owned_fields(
                 action["requires_confirmation"] = False
             normalized_arguments["drive_url"] = (
                 _server_owned_drive_url(prompt, context=context)
-                if action_type in {"import_drive_folder", "upload_report_to_drive"}
+                if action_type
+                in {
+                    "bind_drive_folder",
+                    "check_drive_folder",
+                    "import_drive_folder",
+                    "upload_report_to_drive",
+                }
                 else None
             )
             if action_type in {"deliver_latest_report", "upload_report_to_drive"}:

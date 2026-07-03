@@ -7,8 +7,10 @@ from app.reviews.schemas import GenerateRequest
 
 
 BACKGROUND_ACTIONS = {
+    "check_drive_folder",
     "import_attachment",
     "import_drive_folder",
+    "sync_drive_folder",
     "estimate_kolaudim",
     "generate_kolaudim",
     "deliver_latest_report",

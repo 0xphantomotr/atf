@@ -7,6 +7,10 @@ ACTION_ORDER = (
     "select_project",
     "show_active_project",
     "get_status",
+    "show_drive_folder",
+    "bind_drive_folder",
+    "check_drive_folder",
+    "sync_drive_folder",
     "select_ai_model",
     "import_attachment",
     "import_drive_folder",
@@ -46,6 +50,14 @@ def detect_intent_hints(prompt: str, *, has_attachment: bool = False) -> list[st
     if has_attachment and import_requested:
         hints.add("import_attachment")
     has_drive_folder = "drive.google.com" in prompt.casefold()
+    if has_drive_folder and _contains_any(text, "lidh folder", "vendos folder", "ruaj folder"):
+        hints.add("bind_drive_folder")
+    if _contains_any(text, "folderi i lidhur", "shfaq folderin drive"):
+        hints.add("show_drive_folder")
+    if _contains_any(text, "kontrollo folderin drive", "kontrollo aksesin drive", "drive preflight"):
+        hints.add("check_drive_folder")
+    if _contains_any(text, "sinkronizo drive", "sinkronizo folderin", "perditeso nga drive"):
+        hints.add("sync_drive_folder")
     if has_drive_folder and import_requested:
         hints.add("import_drive_folder")
 
@@ -78,6 +90,10 @@ def detect_intent_hints(prompt: str, *, has_attachment: bool = False) -> list[st
         "get_status",
         "select_ai_model",
         "import_attachment",
+        "bind_drive_folder",
+        "check_drive_folder",
+        "sync_drive_folder",
+        "show_drive_folder",
         "import_drive_folder",
         "generate_kolaudim",
         "deliver_latest_report",

@@ -7,6 +7,10 @@ PROMPT_ACTIONS = {
     "select_project",
     "show_active_project",
     "get_status",
+    "show_drive_folder",
+    "bind_drive_folder",
+    "check_drive_folder",
+    "sync_drive_folder",
     "import_attachment",
     "import_drive_folder",
     "estimate_kolaudim",
@@ -40,6 +44,7 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
     create_count = 0
     import_count = 0
     drive_import_count = 0
+    drive_sync_count = 0
     estimate_ids: list[str] = []
     generation_ids: list[str] = []
     delivery_count = 0
@@ -107,6 +112,13 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
                 raise PromptPolicyError(
                     "multiple_drive_imports",
                     "Një kërkesë /prompt mund ta importojë folderin Drive vetëm një herë.",
+                )
+        if action.type == "sync_drive_folder":
+            drive_sync_count += 1
+            if drive_sync_count > 1:
+                raise PromptPolicyError(
+                    "multiple_drive_syncs",
+                    "Një kërkesë /prompt mund ta sinkronizojë Drive vetëm një herë.",
                 )
         if action.type == "estimate_kolaudim":
             estimate_ids.append(action.id)
@@ -199,7 +211,7 @@ def validate_prompt_plan(plan: PromptPlan, *, has_attachment: bool = False) -> N
 
         completed_ids.add(action.id)
 
-    if import_count + drive_import_count > 1:
+    if import_count + drive_import_count + drive_sync_count > 1:
         raise PromptPolicyError(
             "multiple_import_sources",
             "Përdorni vetëm një burim dosjeje në të njëjtën kërkesë: attachment ose Drive.",
