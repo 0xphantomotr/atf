@@ -4,10 +4,11 @@ from aiogram.types import CallbackQuery, Message
 from fastapi import HTTPException
 
 from app.ai import service as ai_service
+from app.ai.models import UserAISetting
 from app.ai.schemas import AISettingUpsert
 from app.ai.stages import AI_STAGE_LABELS, AI_STAGES, normalize_stage_models
 from app.db.session import AsyncSessionLocal
-from app.telegram.service import get_or_create_message_user
+from app.telegram.service import get_or_create_message_user, get_or_create_telegram_user
 
 router = Router()
 
@@ -22,7 +23,11 @@ async def ai_status(message: Message) -> None:
         await message.answer(_ai_help_text())
         return
 
-    await message.answer(
+    await message.answer(_ai_status_text(setting))
+
+
+def _ai_status_text(setting: UserAISetting) -> str:
+    return (
         "AI është konfiguruar.\n\n"
         f"Provider: {setting.provider}\n"
         f"Modeli bazë: {setting.selected_model}\n"
@@ -176,7 +181,17 @@ async def delete_ai_key(message: Message) -> None:
 @router.callback_query(F.data == "ai:settings")
 async def ai_settings_callback(callback: CallbackQuery) -> None:
     if callback.message:
-        await ai_status(callback.message)
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_telegram_user(
+                session,
+                telegram_user=callback.from_user,
+            )
+            setting = await ai_service.get_user_ai_setting(session, user_id=user.id)
+
+        if setting is None:
+            await callback.message.answer(_ai_help_text())
+        else:
+            await callback.message.answer(_ai_status_text(setting))
     await callback.answer()
 
 
